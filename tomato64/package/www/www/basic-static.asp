@@ -23,7 +23,7 @@
 
 <script>
 
-//	<% nvram("lan_ipaddr,lan_netmask,dhcpd_static,cstats_include,dhcpd_slt,ipv6_service,t_model_name,os_version"); %>
+//	<% nvram("lan_ipaddr,lan_ifname,lan_netmask,dhcpd_static,cstats_include,dhcpd_slt,ipv6_service,t_model_name,os_version"); %>
 
 var cprefix = 'basic_static';
 
@@ -38,6 +38,81 @@ function isIPv6Suffix(ip) {
 	return (parseInt(g[0], 16) == 0 && parseInt(g[1], 16) == 0 && parseInt(g[2], 16) == 0 && parseInt(g[3], 16) == 0);
 }
 /* IPV6-END */
+
+const ip2lan = 1, lan2br = 2, br2lan = 3;
+
+var lans = [];
+
+for (var i = 0; i <= MAX_BRIDGE_ID; ++i) {
+	var j = (i == 0) ? 'lan' : 'lan'+i.toString();
+	var addr = nvram[j+'_ipaddr'] || '';
+	if ((addr != '') && (addr != '0.0.0.0') && (addr != '127.0.0.1')) {
+		var br = nvram[j+'_ifname'] || '';
+		var netm = nvram[j+'_netmask'] || '';
+		if ((br != '') && (netm != '') && (netm != '0.0.0.0')) {
+			if (i == 0)
+				j = 'lan0';
+			lans.push({ lan: j.toUpperCase(), ip: addr, iface: br, mask: netm });
+		}
+	}
+}
+
+function ip_in_lan(ip, lanIP, mask) {
+	if (!ip || typeof ip !== 'string') return null;
+	var parts = ip.split('.');
+	if (parts.length !== 4) return null;
+	
+	function ipToInt(p) {
+		return ((parseInt(p[0], 10) << 24) |
+		        (parseInt(p[1], 10) << 16) |
+		        (parseInt(p[2], 10) << 8)  |
+		         parseInt(p[3], 10)) >>> 0;
+	}
+
+	try {
+		var ipInt = ipToInt(parts);
+		var lanInt = ipToInt(lanIP.split('.'));
+		var maskInt = ipToInt(mask.split('.'));
+		return (ipInt & maskInt) === (lanInt & maskInt);
+	} catch (e) {
+		return false;
+	}
+}
+
+function conv(type, d) {
+	if (type == ip2lan) {
+		for (var i = 0; i < lans.length; ++i) {
+			var t = ip_in_lan(d, lans[i].ip, lans[i].mask);
+			if (t === null) {
+				return null;
+			}
+			else if (t) {
+				return lans[i].lan;
+			}
+		}
+		
+		return false;
+	}
+	else if (type == lan2br) {
+		for (var i = 0; i < lans.length; ++i) {
+			if (d == lans[i].lan)
+				return lans[i].iface;
+		}
+		
+		return false;
+	}
+	else if (type == br2lan) {
+		for (var i = 0; i < lans.length; ++i) {
+			if (d == lans[i].iface)
+				return lans[i].lan;
+		}
+		
+		return false;
+	}
+	else
+		return false;
+
+}
 
 var sg = new TomatoGrid();
 
@@ -58,6 +133,8 @@ sg.resetNewEditor = function() {
 			f[3].value = v6 ? '' : c[1];
 			f[4].value = v6 ? c[1] : '';
 			f[6].value = c[2];
+			f[7].disabled = 1
+			f[7].value = v6 ? '' : (conv(ip2lan, c[1]) || '');
 			return;
 		}
 	}
@@ -66,20 +143,13 @@ sg.resetNewEditor = function() {
 	f[1].value = mac_null;
 	f[2].disabled = 1;
 	f[2].checked = 0;
+	f[3].value = '';
 	f[4].value = '';
 	f[5].checked = 0;
 	f[6].value = '';
+	f[7].disabled = 1;
+	f[7].value = '';
 
-	n = 10;
-	do {
-		if (--n < 0) {
-			f[3].value = '';
-			return;
-		}
-		autonum++;
-	} while (((c = fixIP(ntoa(autonum), 1)) == null) || (c == nvram.lan_ipaddr) || (this.inStatic(c)));
-
-	f[3].value = c;
 }
 
 sg.setup = function() {
@@ -95,16 +165,17 @@ sg.setup = function() {
 		{ type: 'text', maxlen: 17 },
 		{ type: 'text', maxlen: 46, attrib: ipv6_attrib },
 		{ type: 'checkbox', prefix: '<div class="centered">', suffix: '<\/div>' },
-		{ type: 'text', maxlen: 50 } ] );
-
-	this.headerSet(['MAC Address', 'Static arp', 'IPv4 Address', 'IPv6 Address', 'IPTraffic', 'Hostname']);
+		{ type: 'text', maxlen: 50 },
+		{ type: 'text', maxlen: 5, attrib: 'disabled' } ] );
+		
+	this.headerSet(['MAC Address', 'Static arp', 'IPv4 Address', 'IPv6 Address', 'IPTraffic', 'Hostname', 'LAN']);
 
 	var ipt = nvram.cstats_include.split(',');
 	var s = nvram.dhcpd_static.split('>');
 	for (var i = 0; i < s.length; ++i) {
 		var h = '0';
 		var t = s[i].split('<');
-		if (t.length >= 4) {
+		if (t.length >= 5) {
 			var d = t[0].split(',');
 			for (var j = 0; j < ipt.length; ++j) {
 				if (t[1].length > 0 && t[1] == ipt[j]) {
@@ -112,8 +183,11 @@ sg.setup = function() {
 					break;
 				}
 			}
-
-			this.insertData(-1, [d[0], ((d.length >= 2) ? d[1] : mac_null), t[3], t[1], ((t.length >= 5) ? t[4] : ''), h, t[2]]);
+			
+			if ((t[4]) && (t[4] != 'N/A'))
+				t[4] = conv(br2lan, t[4]);
+			 
+			this.insertData(-1, [d[0], ((d.length >= 2) ? d[1] : mac_null), t[3], t[1], ((t.length >= 6) ? t[5] : ''), h, t[2], ((t[4]) ? t[4] : '')]);
 		}
 	}
 	this.sort(2);
@@ -121,28 +195,48 @@ sg.setup = function() {
 	this.resetNewEditor();
 }
 
-sg.exist = function(f, v) {
+sg.exist = function(f, v, r) {
 	var data = this.getAllData();
+	var txt = { 0: 'MAC', 1: 'MAC', 6: 'host name' };
+	var ret = [];
 	for (var i = 0; i < data.length; ++i) {
-		if (data[i][f] == v)
-			return true;
+		if (data[i][f] == v) {
+			if (f in txt) {
+				if (!data[i][3]) {
+					ret.push('Cannot add entry for this '+txt[f]+' - an IP-less entry with it exists - see notes section for info.', f);
+					return ret;
+				}
+				if (!r[3].value) {
+					ret.push('Cannot add IP-less entry for this '+txt[f]+' - an entry with it exists - see notes section for info.', f);
+					return ret;
+				}
+				if (r[7].value === data[i][7]) {
+					ret.push('Cannot add entry for this '+txt[f]+' on '+data[i][7]+' - an entry exists - see notes sections for info.', f, 3);
+					return ret;
+				}
+				continue;
+			}
+			else
+				return true;
+		}
 	}
+	
 	return false;
 }
 
-sg.existMAC = function(mac) {
+sg.existMAC = function(mac, r) {
 	if (isMAC0(mac))
 		return false;
-
-	return this.exist(0, mac) || this.exist(1, mac);
+	
+	return this.exist(0, mac, r) || this.exist(1, mac, r);
 }
 
-sg.existName = function(name) {
-	return this.exist(6, name);
+sg.existName = function(name, r) {
+	return this.exist(6, name, r);
 }
 
-sg.inStatic = function(n) {
-	return this.exist(3, n);
+sg.inStatic = function(n, r) {
+	return this.exist(3, n, r);
 }
 
 sg.dataToView = function(data) {
@@ -157,18 +251,25 @@ sg.dataToView = function(data) {
 	v.push(escapeHTML(''+data[4]));
 	v.push((data[5].toString() != '0') ? '<small><i>Enabled<\/i><\/small>' : '');
 	v.push(escapeHTML(''+data[6]));
-
+	v.push(escapeHTML(''+data[7]));
 	return v;
 }
 
 sg.dataToFieldValues = function (data) {
-	return ([data[0],data[1],(data[2].toString() != '0') ? 'checked' : '',data[3],data[4],(data[5].toString() != '0') ? 'checked' : '',data[6]]);
+	
+	return ([data[0],data[1],(data[2].toString() != '0') ? 'checked' : '',data[3],data[4],(data[5].toString() != '0') ? 'checked' : '',data[6], data[7]]);
 }
 
 sg.fieldValuesToData = function(row) {
 	var f = fields.getAll(row);
-
-	return ([f[0].value,f[1].value,f[2].checked ? '1' : '0',f[3].value,f[4].value,f[5].checked ? '1' : '0',f[6].value]);
+	if (!f[3].value) {
+		if ((!isMAC0(f[0].value) || !isMAC0(f[1].value)) && f[6].value) {
+			f[7].value = 'N/A';
+		}
+		else
+			f[7].value = '';
+	}
+	return ([f[0].value,f[1].value,f[2].checked ? '1' : '0',f[3].value,f[4].value,f[5].checked ? '1' : '0',f[6].value,f[7].value]);
 }
 
 sg.sortCompare = function(a, b) {
@@ -191,6 +292,9 @@ sg.sortCompare = function(a, b) {
 		case 4:
 			r = cmpInt(da[5], db[5]);
 		break;
+		case 6:
+			r = cmpText(da[7], db[7]);
+		break;
 	}
 	if (r == 0)
 		r = cmpText(da[6], db[6]);
@@ -202,7 +306,7 @@ sg.verifyFields = function(row, quiet) {
 	var f, s, i;
 
 	f = fields.getAll(row);
-
+// verify entreis
 	if (!v_macz(f[0], quiet))
 		return 0;
 	if (!v_macz(f[1], quiet))
@@ -219,22 +323,22 @@ sg.verifyFields = function(row, quiet) {
 		f[1].value = f[0].value;
 		f[0].value = s;
 	}
-
+	
+	if (((f[0].value == mac_null) || (f[1].value == mac_null)) && (f[0].value == f[1].value)) {
+		f[2].disabled = 1;
+		f[2].checked = 0;
+	}
+	else
+		f[2].disabled = 0;
+	
 	f[1].disabled = f[2].checked;
 
-	for (i = 0; i < 2; ++i) {
-		if (this.existMAC(f[i].value)) {
-			ferror.set(f[i], 'Duplicate MAC address', quiet);
-			return 0;
-		}
-	}
 
 	if (f[3].value != '') {
 		if (!v_ip(f[3], 1)) {
 			ferror.set(f[3], 'Invalid IP address', quiet);
 			return 0;
 		}
-
 		/* 0 and 255 in last octet is not allowed */
 		if ((i = f[3].value.lastIndexOf('.')) != -1) {
 			s = parseInt(f[3].value.substr(i + 1), 10);
@@ -243,91 +347,124 @@ sg.verifyFields = function(row, quiet) {
 				return 0;
 			}
 		}
-
 		if (this.inStatic(f[3].value)) {
 			ferror.set(f[3], 'Duplicate IP address', quiet);
 			return 0;
 		}
 	}
-
-/* IPV6-BEGIN */
+	
+	/* IPV6-BEGIN */
 	if (f[4].value != '') {
 		if (!v_ipv6_addr(f[4], 1)) {
 			ferror.set(f[4], 'Invalid IPv6 address', quiet);
 			return 0;
 		}
 
-		/* a full address breaks if the prefix changes; nudge toward a suffix */
+	/* a full address breaks if the prefix changes; nudge toward a suffix */
 		if ((!quiet) && (nvram.ipv6_service == 'native-pd') && (!isIPv6Suffix(f[4].value))) {
 			if (!confirm('This looks like a full IPv6 address, but your IPv6 service uses a dynamically delegated prefix. The reservation may stop working after the prefix changes; a suffix such as ::50 adapts automatically.\n\nClick OK to keep the full address, or Cancel to edit it.'))
 				return 0;
 		}
 
-		if (this.exist(4, f[4].value)) {
+		if (this.exist(4, f[4].value, f)) {
 			ferror.set(f[4], 'Duplicate IPv6 address', quiet);
 			return 0;
 		}
 	}
-/* IPV6-END */
-
-/* REMOVE-BEGIN
-	if (!v_hostname(f[6], quiet, 6))
-		return 0;
-REMOVE-END */
-
+	/* IPV6-END */
+	
 	s = f[6].value.trim().replace(/\s+/g, ' ');
-
+	f[6].value = s;
+	
 	if (s.length > 0) {
-		if (f[3].value == '') {
+		if (s.indexOf('.') != -1) {
+			if (s.search(/^[a-zA-Z0-9_\-\.]+$/) == -1) {
+				ferror.set(f[6], 'Invalid hostname. Only a single hostname containing the characters "A-Z 0-9 - _ ." is allowed', quiet);
+				return 0;
+			}
+			if (!quiet) {
+				if (!confirm('Hostname contains dot(s). Are you sure to continue?'))
+				return 0;
+			}
+		}
+		else {
 			if (s.search(/^[a-zA-Z0-9_\-]+$/) == -1) {
 				ferror.set(f[6], 'Invalid hostname. Only a single hostname containing the characters "A-Z 0-9 - _" is allowed', quiet);
 				return 0;
 			}
 		}
-		else {
-			if (s.indexOf('.') != -1) {
-				if (s.search(/^[a-zA-Z0-9_\-\.]+$/) == -1) {
-					ferror.set(f[6], 'Invalid hostname. Only a single hostname containing the characters "A-Z 0-9 - _ ." is allowed', quiet);
-					return 0;
-				}
-				if (!quiet) {
-					if (!confirm('Hostname contains dot(s). Are you sure to continue?'))
-						return 0;
-				}
+	}
+	
+	
+//end entries
+
+// verify duplicates
+	if (f[3].value != '') {
+		var ret = conv(ip2lan, f[3].value);
+		if (ret) {
+			f[7].value = ret;
+			ferror.clear(f[3]);
+		}
+		
+		if (!quiet) {
+			if (ret === false) {
+				ferror.set(f[3], 'Cannot add entry for this IP - it is not within the subnet for your LAN(s) - see notes section for info.', quiet);
+				return 0;
 			}
-			else {
-				if (s.search(/^[a-zA-Z0-9_\- ]+$/) == -1) {
-					ferror.set(f[6], 'Invalid hostname. Only characters "A-Z 0-9 - _" are allowed', quiet);
-					return 0;
+			
+		}
+	}
+	else if ((!isMAC0(f[0].value) || !isMAC0(f[1].value)) && f[6].value) {
+			f[7].value = 'N/A';
+			ferror.clear(f[3]);
+	}
+	else {
+		f[7].value = '';
+		ferror.clear(f[3]);
+	}
+	
+	if (!quiet) {
+		for (i = 0; i < 2; ++i) {
+			var ret = this.existMAC(f[i].value, f);
+			if (ret) {
+				for (var m = 1; m < ret.length; ++m) {
+					ferror.set(f[ret[m]], ret[0], (m == 1) ? false : true);
 				}
+				return 0;
 			}
 		}
-		if (this.existName(s)) {
-			ferror.set(f[6], 'Duplicate hostname', quiet);
-			return 0;
-		}
-		f[6].value = s;
 	}
 
-	if (isMAC0(f[0].value)) {
-		if (s == '') {
-			s = 'Both MAC address and name fields must not be empty';
-			ferror.set(f[0], s, 1);
-			ferror.set(f[6], s, quiet);
+/* REMOVE-BEGIN
+	if (!v_hostname(f[6], quiet, 6))
+		return 0;
+REMOVE-END */
+	var ret = this.existName(f[6].value, f);
+	if (!quiet) {
+		if (ret) {
+			for (var m = 1; m < ret.length; ++m) {
+				ferror.set(f[ret[m]], ret[0], (m == 1) ? false : true);
+			}
 			return 0;
 		}
-		else {
-			ferror.clear(f[0]);
+	}
+	else {
+		if (!ret)
 			ferror.clear(f[6]);
+	}
+	
+	if (isMAC0(f[0].value)) {
+		if (!quiet) {
+			if ((f[6].value == '') && (f[3].value == '')) {
+				var er = 'Must have at least one set of the following: MAC/IP, MAC/NAME, IP/NAME - see notes section for info.';
+				ferror.set(f[0], er, 1);
+				ferror.set(f[6], er, false);
+				ferror.set(f[3], er, false);
+				return 0;
+			}
 		}
 	}
 
-	if (((f[0].value == mac_null) || (f[1].value == mac_null)) && (f[0].value == f[1].value)) {
-		f[2].disabled = 1;
-		f[2].checked = 0;
-	}
-	else
-		f[2].disabled = 0;
 
 	return 1;
 }
@@ -352,14 +489,17 @@ function save() {
 	var sdhcp = '';
 	var ipt = '';
 	var i;
+	var br = '';
 
 	for (i = 0; i < data.length; ++i) {
 		var d = data[i];
+		if ((d[7]) && (d[7] != 'N/A'))
+			br = conv(lan2br, d[7]);
 		sdhcp += d[0];
 		if (!isMAC0(d[1]))
 			sdhcp += ','+d[1];
 
-		sdhcp += '<'+d[3]+'<'+d[6]+'<'+d[2]+'<'+d[4]+'>';
+		sdhcp += '<'+d[3]+'<'+d[6]+'<'+d[2]+'<'+br+'<'+d[4]+'>';
 		if (d[5] == '1')
 			ipt += ((ipt.length > 0) ? ',' : '')+d[3];
 	}

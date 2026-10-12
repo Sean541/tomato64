@@ -654,7 +654,7 @@ static void write_dmz_reservation(FILE *f, const char *sdhcp_lease)
 static void write_static_reservations(FILE *f, FILE *hf, int do_dhcpd_hosts, const char *sdhcp_lease)
 {
 	char *nve, *nvp, *p;
-	const char *mac, *ip, *name, *bind, *ip6;
+	const char *mac, *ip, *name, *bind, *lan, *ip6;
 	struct in_addr in4;
 #ifdef TCONFIG_IPV6
 	struct in6_addr in6;
@@ -673,10 +673,10 @@ static void write_static_reservations(FILE *f, FILE *hf, int do_dhcpd_hosts, con
 
 	nve = nvp = strdup(nvram_safe_get("dhcpd_static"));
 	while (nvp && (p = strsep(&nvp, ">")) != NULL) {
-		mac = ip = name = bind = ip6 = NULL;
+		mac = ip = name = bind = lan = ip6 = NULL;
 
 		/* minimum 4 fields required (5th, IPv6, is optional) */
-		if ((vstrsep(p, "<", &mac, &ip, &name, &bind, &ip6)) < 4)
+		if ((vstrsep(p, "<", &mac, &ip, &name, &bind, &lan, &ip6)) < 5)
 			continue;
 
 		/* validate IP */
@@ -693,15 +693,15 @@ static void write_static_reservations(FILE *f, FILE *hf, int do_dhcpd_hosts, con
 #endif
 
 		/* add to hosts file (gives the reservation forward A/AAAA and reverse PTR records) */
-		if (hf && *name) {
-			if (*ip)
-				fprintf(hf, "%s %s\n", ip, name);
+	//	if (hf && *name) {
+	//		if (*ip)
+	//			fprintf(hf, "%s %s\n", ip, name);
 #ifdef TCONFIG_IPV6
 			/* skip a suffix-only reservation (e.g. ::50) in the hosts file - dnsmasq fills in the prefix at lease time */
-			if (ip6 && *ip6 && (in6.s6_addr32[0] || in6.s6_addr32[1]))
-				fprintf(hf, "%s %s\n", ip6, name);
+	//		if (ip6 && *ip6 && (in6.s6_addr32[0] || in6.s6_addr32[1]))
+		//		fprintf(hf, "%s %s\n", ip6, name);
 #endif
-		}
+		//}
 
 		/* validate MAC(s) - dhcpd_static may carry a single MAC or a pair joined by ',' for one reservation */
 		macs_ok = 0;
@@ -720,19 +720,17 @@ static void write_static_reservations(FILE *f, FILE *hf, int do_dhcpd_hosts, con
 		}
 
 		/* add to dnsmasq conf */
-		if (do_dhcpd_hosts > 0 && macs_ok && (*ip || (ip6 && *ip6) || *name)) {
-			int have_addr = 0;
+		if (do_dhcpd_hosts > 0 && macs_ok && ((*ip && *lan) || (ip6 && *ip6) || *name)) {
 
-			fprintf(f, "dhcp-host=%s", mac);
-			if (*ip) {
-				fprintf(f, ",%s", ip);
-				have_addr = 1;
+			if (*ip && *lan) {
+				fprintf(f, "dhcp-host=tag:%s,%s,%s", lan, mac, ip);
+			} else {
+				fprintf(f, "dhcp-host=%s", mac);
 			}
 			if (ip6 && *ip6) {
 				fprintf(f, ",[%s]", ip6);
-				have_addr = 1;
 			}
-			if (!have_addr && *name)
+			if (*name)
 				fprintf(f, ",%s", name);
 
 			if (nvram_get_int("dhcpd_slt") != 0)
