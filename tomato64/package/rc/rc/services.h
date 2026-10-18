@@ -194,6 +194,7 @@ enum svc_op_id {
 	SVCOP_FAN,
 #endif /* TOMATO64_HAS_FAN */
 #endif /* TOMATO64 */
+	SVCOP_NVME,
 	SVCOP_MAX
 };
 
@@ -491,6 +492,7 @@ static const struct svc_entry svc_table[] = {
 #ifdef TOMATO64
 	{ "zram",		SVCF_LIST | SVCF_NO_STATUS,					P_NONE,			0,	SVCOP_ZRAM		},
 #endif /* TOMATO64 */
+	{ "nvme", 		SVCF_LIST | SVCF_NO_STATUS, P_NONE, 0, SVCOP_NVME 	},
 	{ NULL,			0,								P_NONE,			0 }
 };
 
@@ -584,6 +586,7 @@ static const struct svc_op svc_ops[] = {
 	SVC_OP(stop_fan, start_fan),
 #endif /* TOMATO64_HAS_FAN */
 #endif /* TOMATO64 */
+	SVC_OP(stop_nvme, start_nvme),
 };
 
 static const struct svc_entry *svc_find(const char *name);

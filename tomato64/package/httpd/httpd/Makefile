@@ -88,7 +88,7 @@ endif
 OBJS  = httpd.o cgi.o tomato.o version.o misc.o dhcp.o upgrade.o \
 	traceping.o parser.o upnp.o ctnf.o nvram.o log.o webio.o \
 	wl.o devlist.o ddns.o config.o bwm.o utf8.o cpuinfo.o \
-	iptraffic.o #blackhole.o
+	iptraffic.o nvme.o #blackhole.o
 
 # TOMATO64 WiFi helper library
 OBJS += wlhelper.o

@@ -2707,6 +2707,9 @@ function navi() {
 /* USB-BEGIN */
 		['USB and NAS',			'nas', 0, [
 			['USB Support',			'usb.asp'],
+/* NVME-BEGIN */
+			['NVMe', 			'nvme.asp'],
+/* NVME-END */
 /* FTP-BEGIN */
 			['FTP Server',			'ftp.asp'],
 /* FTP-END */

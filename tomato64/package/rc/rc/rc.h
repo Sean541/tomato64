@@ -686,6 +686,13 @@ extern int write_ovpn_resolv(FILE*);
 extern void nvram_format_compat(void);
 #endif /* TOMATO64 */
 
+
+/* nvme.c */
+extern int nvme_main(int argc, char *argv[]);
+extern void discover_nvme_hardware(void);
+extern void start_nvme(void);
+extern void stop_nvme(void);
+
 /* wireguard.c */
 #ifdef TCONFIG_WIREGUARD
 #define WG_KEY_LEN 32

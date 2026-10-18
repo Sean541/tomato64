@@ -95,7 +95,7 @@ OBJS := rc.o init.o interface.o network.o wan.o services.o dhcp.o \
 	firewall.o ppp.o telssh.o listen.o redial.o \
 	led.o qos.o forward.o misc.o restrict.o \
 	gpio.o sched.o bwlimit.o arpbind.o tomatoanon.o mwan.o pbr.o \
-	dnsmasq.o format.o
+	dnsmasq.o format.o nvme.o
 
 OBJS += wifi.o
 OBJS += quotas.o
@@ -216,6 +216,7 @@ endif
 	@cd $(INSTALLDIR)/sbin && ln -sf rc hotplug
 	@cd $(INSTALLDIR)/sbin && ln -sf rc service
 	@cd $(INSTALLDIR)/sbin && ln -sf rc buttons
+	@cd $(INSTALLDIR)/sbin && ln -sf rc nvme
 ifeq ($(TCONFIG_RTNPLUS),y)
 	@cd $(INSTALLDIR)/sbin && ln -sf rc blink
 	@cd $(INSTALLDIR)/sbin && ln -sf rc blink_br

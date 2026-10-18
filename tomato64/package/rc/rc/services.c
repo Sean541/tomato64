@@ -2233,6 +2233,21 @@ static void start_cstats(int new)
 	}
 }
 
+void start_nvme(void)
+{
+	logmsg(LOG_INFO, "starting nvme storage...");
+	// Runs the compiled applet block with a NULL parameter to trigger the mount loops
+	nvme_main(0, NULL); 
+}
+
+void stop_nvme(void)
+{
+	char *stop_argv[] = { "nvme", "stop", NULL };
+	logmsg(LOG_INFO, "stopping nvme storage...");
+	// Passes the 'stop' argument array down into the execution engine
+	nvme_main(2, stop_argv); 
+}
+
 #ifdef TCONFIG_MEDIA_SERVER
 static void start_media_server(int force)
 {
@@ -2626,6 +2641,7 @@ void start_services(void)
 #ifdef TCONFIG_IRQBALANCE
 	start_irqbalance();
 #endif
+	start_nvme();
 }
 
 void stop_services(void)
@@ -2719,6 +2735,7 @@ void stop_services(void)
 	stop_bridger();
 #endif /* TOMATO64_HAS_BRIDGER */
 #endif
+	stop_nvme();
 }
 
 #include "services.h"
@@ -3458,6 +3475,12 @@ static int svc_exec_simple(const struct svc_entry *svc, const char *service, int
 				sleep(5);
 				force_to_dial(ifname);
 			}
+			return 1;
+		case SVCOP_NVME:
+			if (act_stop && !act_start)
+				stop_nvme();
+			if (act_start)
+				start_nvme();
 			return 1;
 		}
 		return 0;

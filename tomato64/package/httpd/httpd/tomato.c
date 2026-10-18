@@ -128,6 +128,7 @@ const aspapi_t aspapi[] = {
 	{ "bandwidth",			asp_bandwidth			},
 	{ "build_time",			asp_build_time			},
 	{ "cgi_get",			asp_cgi_get			},
+	{ "nvme_disks",             	asp_nvme_disks			},
 	{ "compmac",			asp_compmac			},
 	{ "ctcount",			asp_ctcount			},
 	{ "ctdump",			asp_ctdump			},
@@ -1830,6 +1831,7 @@ static const nvset_t nvset_list[] = {
 	{ "pptpc_stateless",		V_01				},
 	{ "pptpd_chap",			V_RANGE(0, 2)			},
 #endif
+	{ "nvme_mounts", 		V_TEXT(0, 1024) 		},
 
 #ifdef TCONFIG_WIREGUARD
 /* wireguard */
