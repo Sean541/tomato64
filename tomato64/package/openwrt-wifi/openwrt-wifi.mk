@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-OPENWRT_WIFI_VERSION = v25.12.5
+OPENWRT_WIFI_VERSION = v25.12.6
 OPENWRT_WIFI_SITE = https://github.com/openwrt/openwrt.git
 #OPENWRT_WIFI_SITE = https://git.openwrt.org/openwrt/openwrt.git
 OPENWRT_WIFI_SITE_METHOD = git
@@ -102,6 +102,26 @@ define OPENWRT_WIFI_INSTALL_TARGET_CMDS
 	if [ "$(BR2_PACKAGE_PLATFORM_BCM53XX)" = "y" ]; then \
 		$(INSTALL) -d $(TARGET_DIR)/usr/libexec/platform; \
 		$(INSTALL) -m 0755 $(BR2_EXTERNAL_TOMATO64_PATH)/package/openwrt-wifi/packet-steering-bcm53xx $(TARGET_DIR)/usr/libexec/platform/packet-steering.sh; \
+	fi
+
+	# Platform-specific NIC IRQ pinning, run by the packet-steering wrapper
+	# and used as irqbalance's --policyscript
+	if [ "$(BR2_PACKAGE_PLATFORM_R76S)" = "y" ]; then \
+		IRQ_MAP=irq-affinity-r76s.map; \
+	elif [ "$(BR2_PACKAGE_PLATFORM_R6S)" = "y" ]; then \
+		IRQ_MAP=irq-affinity-r6s.map; \
+	elif [ "$(BR2_PACKAGE_PLATFORM_R5S)" = "y" ]; then \
+		IRQ_MAP=irq-affinity-r5s.map; \
+	fi; \
+	if [ -n "$$IRQ_MAP" ]; then \
+		$(INSTALL) -d $(TARGET_DIR)/usr/libexec/platform; \
+		$(INSTALL) -m 0755 $(BR2_EXTERNAL_TOMATO64_PATH)/package/openwrt-wifi/irq-affinity $(TARGET_DIR)/usr/libexec/platform/irq-affinity.sh; \
+		$(INSTALL) -m 0644 $(BR2_EXTERNAL_TOMATO64_PATH)/package/openwrt-wifi/$$IRQ_MAP $(TARGET_DIR)/usr/libexec/platform/irq-affinity.map; \
+	fi
+
+	# Platform-specific adjustments run after the generic packet steering
+	if [ "$(BR2_PACKAGE_PLATFORM_R76S)" = "y" ]; then \
+		$(INSTALL) -D -m 0755 $(BR2_EXTERNAL_TOMATO64_PATH)/package/openwrt-wifi/packet-steering-post-r76s $(TARGET_DIR)/usr/libexec/platform/packet-steering-post.sh; \
 	fi
 
 	# OpenWrt sysupgrade framework (shared by all NAND/UBI targets). The

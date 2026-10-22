@@ -15,8 +15,18 @@ if [ "$packet_steering" != "0" ]; then
 	[ "${steering_flows:-0}" -gt 0 ] && opts="-l $steering_flows"
 fi
 
+# Platform-specific IRQ affinity, applied whatever the steering setting
+if [ -e /usr/libexec/platform/irq-affinity.sh ]; then
+	/usr/libexec/platform/irq-affinity.sh
+fi
+
 if [ -e /usr/libexec/platform/packet-steering.sh ]; then
 	/usr/libexec/platform/packet-steering.sh "$packet_steering"
 else
 	/usr/libexec/network/packet-steering.uc $opts "$packet_steering"
+fi
+
+# Platform-specific adjustments on top of the steering above
+if [ -e /usr/libexec/platform/packet-steering-post.sh ]; then
+	/usr/libexec/platform/packet-steering-post.sh "$packet_steering"
 fi
