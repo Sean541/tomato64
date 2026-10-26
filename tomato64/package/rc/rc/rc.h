@@ -689,9 +689,19 @@ extern void nvram_format_compat(void);
 
 /* nvme.c */
 extern int nvme_main(int argc, char *argv[]);
-extern void discover_nvme_hardware(void);
 extern void start_nvme(void);
 extern void stop_nvme(void);
+extern int nvme_valid_disk(const char *s);
+extern int nvme_valid_partition(const char *s);
+extern int nvme_valid_label(const char *s);
+extern int nvme_have_tool(const char *name);
+extern void nvme_set_error(const char *msg);
+extern int nvme_unmount_partition(const char *dev);
+extern void nvme_get_partition_uuid(const char *dev_node, char *out_uuid, size_t uuid_len);
+extern int nvme_record_matches(const char *rec_dev, const char *rec_uuid, const char *dev, const char *uuid);
+extern int nvme_execute_format(const char *dev, const char *fs, const char *label);
+extern int nvme_execute_partition(const char *disk, const char *size_mb, const char *label);
+extern int nvme_execute_delete(const char *dev);
 
 /* wireguard.c */
 #ifdef TCONFIG_WIREGUARD

@@ -29,7 +29,6 @@
 #include <typedefs.h>
 #include <bcmnvram.h>
 
-extern struct nvram_tuple nvme_defaults[];
 extern struct nvram_tuple router_defaults[];
 extern struct nvram_tuple rstats_defaults[];
 extern struct nvram_tuple cstats_defaults[];

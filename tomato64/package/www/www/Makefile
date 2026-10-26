@@ -362,6 +362,7 @@ endif
 # Only include the USB and NAS pages if USB Support is configured in.
 ifneq ($(TCONFIG_USB),y)
 	rm -f $(INSTALLDIR)/www/nas-*.*
+	rm -f $(INSTALLDIR)/www/nvme*.*
 	rm -f $(INSTALLDIR)/www/wwan_parser.js
 	rm -f $(INSTALLDIR)/www/wwan-sms.asp
 	sed -i $(INSTALLDIR)/www/tomato.css -e "/USB-BEGIN/,/USB-END/d"
@@ -376,6 +377,7 @@ endif
 # ...And also don't include them if we have router with wl_high module but without USB support
 ifeq ($(TCONFIG_REMOVE_USBAPP),y)
 	rm -f $(INSTALLDIR)/www/nas-*.*
+	rm -f $(INSTALLDIR)/www/nvme*.*
 	rm -f $(INSTALLDIR)/www/wwan_parser.js
 	rm -f $(INSTALLDIR)/www/wwan-sms.asp
 	sed -i $(INSTALLDIR)/www/tomato.css -e "/USB-BEGIN/,/USB-END/d"
@@ -919,6 +921,7 @@ endif
 	for F in $(wildcard *.asp *.js *.jsx *.html *.svg) tomato.css; do \
 		[ -f $(INSTALLDIR)/www/$$F ] && sed -i $$F \
 		-e "/USB-BEGIN/d"	-e "/USB-END/d" \
+		-e "/NVME-BEGIN/d"	-e "/NVME-END/d" \
 		-e "/UPS-BEGIN/d"	-e "/UPS-END/d" \
 		-e "/EXTRAS-BEGIN/d"	-e "/EXTRAS-END/d" \
 		-e "/NTFS-BEGIN/d"	-e "/NTFS-END/d" \

@@ -1833,7 +1833,7 @@ static const nvset_t nvset_list[] = {
 	{ "pptpc_stateless",		V_01				},
 	{ "pptpd_chap",			V_RANGE(0, 2)			},
 #endif
-	{ "nvme_mounts", 		V_TEXT(0, 1024) 		},
+	{ "nvme_mounts", 		V_TEXT(0, 2048) 		},
 
 #ifdef TCONFIG_WIREGUARD
 /* wireguard */
@@ -2653,6 +2653,13 @@ static int save_variables(int write)
 	foreach_wif(0, &write, nv_wl_bwcap_chanspec);
 #endif
 
+	/* NVMe mounts end up in mount commands: reject anything that is not a well-formed list */
+	if (((p = webcgi_get("nvme_mounts")) != NULL) && !nvme_mounts_valid(p)) {
+		snprintf(s, sizeof(s), msgf, "nvme_mounts");
+		resmsg_set(s);
+		return 0;
+	}
+
 	char *p1, *p2;
 	if (((p1 = webcgi_get("set_password_1")) != NULL) && (strcmp(p1, "**********") != 0)) {
 		if (((p2 = webcgi_get("set_password_2")) != NULL) && (strcmp(p1, p2) == 0)) {
@@ -2909,6 +2916,7 @@ const struct mime_handler mime_handlers[] = {
 	{ "resolve.cgi",		mime_javascript,			0,	wi_generic,		wo_resolve,		1 },
 	{ "expct.cgi",			mime_html,				0,	wi_generic,		wo_expct,		1 },
 	{ "service.cgi",		NULL,					0,	wi_generic,		wo_service,		1 },
+	{ "nvmecmd.cgi",		mime_javascript,			0,	wi_generic,		wo_nvmecommand,		1 },
 	{ "shutdown.cgi",		mime_html,				0,	wi_generic,		wo_shutdown,		1 },
 #ifdef TCONFIG_OPENVPN
 	{ "vpnstatus.cgi",		mime_javascript,			0,	wi_generic,		wo_ovpn_status,		1 },

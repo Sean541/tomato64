@@ -1616,6 +1616,9 @@ struct nvram_tuple router_defaults[] = {
 	{ "tomatoanon_notify",		"1"				},
 	{ "tomatoanon_id",		""				},
 
+/* nas-nvme */
+	{ "nvme_mounts",		""				},
+
 #ifdef TCONFIG_USB
 /* nas-usb */
 	{ "usb_enable",			"1"				},
@@ -1634,7 +1637,6 @@ struct nvram_tuple router_defaults[] = {
 	{ "usb_usb3",			"1"				},
 #endif /* TOMATO64 */
 #endif
-	{ "nvme_mounts", 		"" 				},
 #ifdef TCONFIG_MICROSD
 	{ "usb_mmc",			"-1"				},
 #endif

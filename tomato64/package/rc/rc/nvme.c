@@ -1,334 +1,703 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <syslog.h>
-#include <bcmnvram.h>
-#include <shutils.h>
-#include <shared.h>
-#include <tomato_profile.h>
-#include <tomato_config.h>
-#include <sys/mount.h>
-#include <ctype.h>
+/*
+ *
+ * Tomato Firmware
+ * NVMe Storage Support
+ *
+ */
+
+
 #include "rc.h"
 
-#define LOGMSG_DISABLE	DISABLE_SYSLOG_OSM
-#define LOGMSG_NVDEBUG	"nvme_debug"
+#include <sys/mount.h>
+#include <sys/statvfs.h>
+#include <mntent.h>
 
-#define MAX_DETECTED_DRIVES 4
-#define MAX_PARTITIONS_PER_DRIVE 8
+#ifndef MNT_DETACH
+#define MNT_DETACH		0x00000002
+#endif
 
-#define APPEND_CONFIG_ENTRY(dest, node, path, boot, uuid) do { \
-    char entry_buf[256]; \
-    snprintf(entry_buf, sizeof(entry_buf), "%s>%s>%s>%s<", (node), (path), (boot), (uuid)); \
-    strlcat((dest), entry_buf, sizeof(dest)); \
-} while(0)
+/* needed by logmsg() */
+#define LOGMSG_DISABLE		DISABLE_SYSLOG_OSM
+#define LOGMSG_NVDEBUG		"nvme_debug"
+
+#define NVME_MAX_MOUNTS		16
+#define MAX_BLKID_CACHE		64
+#define NVME_BUSY_FILE		"/tmp/nvme_busy"
+#define NVME_ERR_FILE		"/tmp/nvme_err"
+#define NVME_DEVICE_WAIT_SECS	5 /* total time to wait for missing device nodes at boot */
 
 typedef struct {
-    char name[32];
+	char device[64];
+	char mount_path[128];
 	char uuid[40];
-    unsigned long blocks;
-    char fstype[16];
-} rc_nvme_partition_t;
+	int mount_at_boot;
+} rc_nvme_mount_t;
 
 typedef struct {
-    char name[32];
-    unsigned long blocks;
-    rc_nvme_partition_t partitions[MAX_PARTITIONS_PER_DRIVE];
-    int partition_count;
-} rc_nvme_drive_t;
+	char dev[64];
+	char fstype[16];
+	char uuid[40];
+} rc_blkid_entry_t;
 
-rc_nvme_drive_t detected_drives[MAX_DETECTED_DRIVES];
-int detected_drives_count = 0;
+static rc_nvme_mount_t rc_nvme_mounts[NVME_MAX_MOUNTS];
+static int rc_nvme_mounts_count = 0;
+static rc_blkid_entry_t blkid_cache[MAX_BLKID_CACHE];
+static int blkid_cache_count = 0;
+static int blkid_cache_loaded = 0;
 
-static void get_partition_metadata(const char *dev_node, char *out_uuid, size_t uuid_len, char *out_type, size_t type_len) {
-    FILE *pipe_fp;
-    char cmd[128];
-    char res_buf[256];
+/* Find the value of KEY="value" in a blkid output line (ignores PARTUUID=, PARTLABEL= ...) */
+static int nvme_blkid_attr(const char *line, const char *key, char *out, size_t len)
+{
+	char pat[32];
+	const char *p, *end, *s = line;
 
-    out_uuid[0] = '\0';
-    strlcpy(out_type, "auto", type_len);
+	out[0] = '\0';
+	snprintf(pat, sizeof(pat), "%s=\"", key);
+	while ((p = strstr(s, pat)) != NULL) {
+		if ((p == line) || (p[-1] == ' '))
+			break;
+		s = p + 1;
+	}
+	if (!p)
+		return 0;
 
-    snprintf(cmd, sizeof(cmd), "blkid %s", dev_node);
-    pipe_fp = popen(cmd, "r");
-    if (!pipe_fp) return;
+	p += strlen(pat);
+	if ((end = strchr(p, '"')) == NULL)
+		return 0;
 
-    if (fgets(res_buf, sizeof(res_buf), pipe_fp) != NULL) {
-        char *uuid_attr = strstr(res_buf, "UUID=\"");
-        if (uuid_attr) {
-            uuid_attr += 6;
-            char *end_quote = strchr(uuid_attr, '"');
-            if (end_quote) {
-                *end_quote = '\0';
-                strlcpy(out_uuid, uuid_attr, uuid_len);
-            }
-        }
-        char *type_attr = strstr(res_buf, "TYPE=\"");
-        if (type_attr) {
-            type_attr += 6;
-            char *end_quote = strchr(type_attr, '"');
-            if (end_quote) {
-                *end_quote = '\0';
-                strlcpy(out_type, type_attr, type_len);
-            }
-        }
-    }
-    pclose(pipe_fp);
+	snprintf(out, len, "%.*s", (int)(end - p), p);
+	return 1;
 }
 
-/* Helper function to find active device node for a given UUID */
-static void get_device_by_uuid(const char *uuid_str, char *out_node, size_t out_len) {
-    FILE *pipe_fp;
-    char cmd[128];
+static void load_blkid_cache(void)
+{
+	DIR *d;
+	struct dirent *de;
+	FILE *pipe_fp;
+	char cmd[2048], path[64], line[512], dev[64];
+	int has_parts = 0;
 
-    out_node[0] = '\0';
-    if (!uuid_str || uuid_str[0] == '\0') return;
+	if (blkid_cache_loaded)
+		return;
+	blkid_cache_loaded = 1;
+	blkid_cache_count = 0;
 
-    snprintf(cmd, sizeof(cmd), "blkid -U %s", uuid_str);
-    pipe_fp = popen(cmd, "r");
-    if (!pipe_fp) return;
+	if ((d = opendir("/sys/class/block")) == NULL)
+		return;
 
-    if (fgets(out_node, out_len, pipe_fp) != NULL) {
-        out_node[strcspn(out_node, "\r\n")] = '\0';
-    }
-    pclose(pipe_fp);
+	strlcpy(cmd, "blkid", sizeof(cmd));
+	while ((de = readdir(d)) != NULL) {
+		if (strncmp(de->d_name, "nvme", 4) != 0)
+			continue;
+		snprintf(path, sizeof(path), "/dev/%s", de->d_name);
+		if (nvme_valid_partition(path)) {
+			strlcat(cmd, " ", sizeof(cmd));
+			strlcat(cmd, path, sizeof(cmd));
+			has_parts = 1;
+		}
+	}
+	closedir(d);
+
+	if (!has_parts || ((pipe_fp = popen(cmd, "r")) == NULL))
+		return;
+
+	while ((fgets(line, sizeof(line), pipe_fp) != NULL) && (blkid_cache_count < MAX_BLKID_CACHE)) {
+		if ((sscanf(line, "%63[^:]:", dev) != 1) || !nvme_valid_partition(dev))
+			continue;
+
+		rc_blkid_entry_t *e = &blkid_cache[blkid_cache_count++];
+		strlcpy(e->dev, dev, sizeof(e->dev));
+		nvme_blkid_attr(line, "TYPE", e->fstype, sizeof(e->fstype));
+		nvme_blkid_attr(line, "UUID", e->uuid, sizeof(e->uuid));
+	}
+	pclose(pipe_fp);
 }
 
-/* Helper function to securely query partition block boundaries from sysfs */
-unsigned long get_partition_blocks(const char *part_name) {
-    char sys_path[128];
-    char size_buf[32];
-    unsigned long sectors = 0;
+/* dev_node must be a validated NVMe partition path */
+static void get_partition_metadata(const char *dev_node, char *out_type, size_t type_len)
+{
+	FILE *pipe_fp;
+	char cmd[128];
+	char res_buf[512];
+	int i;
 
-    snprintf(sys_path, sizeof(sys_path), "/sys/class/block/%s/size", part_name);
-    if (f_read_string(sys_path, size_buf, sizeof(size_buf)) > 0) {
-        sectors = strtoul(size_buf, NULL, 10);
-    }
-    return sectors / 2;
+	strlcpy(out_type, "auto", type_len);
+
+	load_blkid_cache();
+	for (i = 0; i < blkid_cache_count; ++i) {
+		if (strcmp(blkid_cache[i].dev, dev_node) == 0) {
+			if (blkid_cache[i].fstype[0] != '\0')
+				strlcpy(out_type, blkid_cache[i].fstype, type_len);
+			return;
+		}
+	}
+
+	snprintf(cmd, sizeof(cmd), "blkid %s", dev_node);
+	if ((pipe_fp = popen(cmd, "r")) == NULL)
+		return;
+
+	if (fgets(res_buf, sizeof(res_buf), pipe_fp) != NULL) {
+		char type[16];
+		if (nvme_blkid_attr(res_buf, "TYPE", type, sizeof(type)) && (type[0] != '\0'))
+			strlcpy(out_type, type, type_len);
+	}
+	pclose(pipe_fp);
 }
 
-void discover_nvme_hardware(void) {
-    FILE *pipe_fp;
-    char line[256];
-    char dev_path[64], fstype[16];
-    int i;
+/* The partition numbering of /dev/nvme* can change; find the partition that currently has this UUID. */
+static int nvme_find_by_uuid(const char *uuid, char *out, size_t len)
+{
+	int i;
 
-    detected_drives_count = 0;
-
-    pipe_fp = popen("blkid", "r");
-    if (!pipe_fp) return;
-
-    while (fgets(line, sizeof(line), pipe_fp) && detected_drives_count < MAX_DETECTED_DRIVES) {
-        if (sscanf(line, "%63[^:]:", dev_path) == 1) {
-            if (strncmp(dev_path, "/dev/nvme", 9) == 0) {
-                char *part_name = dev_path + 5;
-                char *p_ptr = strchr(part_name, 'p');
-                
-                if (p_ptr != NULL && isdigit((unsigned char)*(p_ptr + 1))) {
-                    size_t drive_name_len = p_ptr - part_name;
-                    char parent_drive[32];
-                    
-                    if (drive_name_len >= sizeof(parent_drive)) drive_name_len = sizeof(parent_drive) - 1;
-                    snprintf(parent_drive, sizeof(parent_drive), "%.*s", (int)drive_name_len, part_name);
-
-                    int drive_idx = -1;
-                    for (i = 0; i < detected_drives_count; i++) {
-                        if (strcmp(detected_drives[i].name, parent_drive) == 0) {
-                            drive_idx = i;
-                            break;
-                        }
-                    }
-
-                    if (drive_idx == -1 && detected_drives_count < MAX_DETECTED_DRIVES) {
-                        drive_idx = detected_drives_count;
-                        strlcpy(detected_drives[drive_idx].name, parent_drive, sizeof(detected_drives[drive_idx].name));
-                        detected_drives[drive_idx].partition_count = 0;
-                        detected_drives[drive_idx].blocks = get_partition_blocks(parent_drive);
-                        detected_drives_count++;
-                    }
-
-                    if (drive_idx != -1) {
-                        rc_nvme_drive_t *drive = &detected_drives[drive_idx];
-                        if (drive->partition_count < MAX_PARTITIONS_PER_DRIVE) {
-                            int p_idx = drive->partition_count;
-                            
-                            strlcpy(drive->partitions[p_idx].name, part_name, sizeof(drive->partitions[p_idx].name));
-                            drive->partitions[p_idx].blocks = get_partition_blocks(part_name);
-							
-							char uuid[40] = "";
-							char *uuid_attr = strstr(line, "UUID=\"");
-							if (uuid_attr) {
-								uuid_attr += 6;
-								char *end_quote = strchr(uuid_attr, '"');
-								if (end_quote) {
-									*end_quote = '\0';
-									strlcpy(uuid, uuid_attr, sizeof(uuid));
-								}
-							}
-							strlcpy(drive->partitions[p_idx].uuid, uuid, sizeof(drive->partitions[p_idx].uuid));
-
-                            strlcpy(fstype, "Unknown", sizeof(fstype));
-                            char *type_attr = strstr(line, "TYPE=\"");
-                            if (type_attr) {
-                                type_attr += 6;
-                                char *end_quote = strchr(type_attr, '"');
-                                if (end_quote) {
-                                    *end_quote = '\0';
-                                    strlcpy(fstype, type_attr, sizeof(fstype));
-                                }
-                            }
-                            strlcpy(drive->partitions[p_idx].fstype, fstype, sizeof(drive->partitions[p_idx].fstype));
-                            drive->partition_count++;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    pclose(pipe_fp);
+	load_blkid_cache();
+	for (i = 0; i < blkid_cache_count; ++i) {
+		if ((blkid_cache[i].uuid[0] != '\0') && (strcmp(blkid_cache[i].uuid, uuid) == 0)) {
+			strlcpy(out, blkid_cache[i].dev, len);
+			return 1;
+		}
+	}
+	return 0;
 }
 
-int nvme_main(int argc, char *argv[]) {
-    char cfg_buf[1024];
-    char new_cfg[1024] = "";
-    char *partition, *mount_path, *mount_at_boot, *uuid_str;
-    char *cfg = nvram_safe_get("nvme_mounts");
-    int is_stop = (argc >= 2 && strcmp(argv[1], "stop") == 0);
-    int nvram_updated = 0;
-    char fstype[16];
+static int nvme_uuid_mismatch(const char *dev_node, const char *expected_uuid)
+{
+	int i;
 
-    if (!cfg || *cfg == '\0') {
-        return 0;
-    }
+	load_blkid_cache();
+	for (i = 0; i < blkid_cache_count; ++i) {
+		if (strcmp(blkid_cache[i].dev, dev_node) == 0)
+			return ((blkid_cache[i].uuid[0] != '\0') && (strcmp(blkid_cache[i].uuid, expected_uuid) != 0));
+	}
+	return 0;
+}
 
-    strlcpy(cfg_buf, cfg, sizeof(cfg_buf));
+/* skip a run of digits; returns 0 if there is none */
+static int nvme_skip_num(const char **p)
+{
+	if (!isdigit((unsigned char)**p))
+		return 0;
+	while (isdigit((unsigned char)**p))
+		(*p)++;
+	return 1;
+}
 
-    char *ptr = cfg_buf;
-    while (ptr && *ptr != '\0') {
-        partition = ptr;
-        char *next_gt = strchr(ptr, '>');
-        if (!next_gt) break;
-        *next_gt = '\0'; 
-        ptr = next_gt + 1;
-        
-        mount_path = ptr;
-        next_gt = strchr(ptr, '>');
-        if (!next_gt) break;
-        *next_gt = '\0'; 
-        ptr = next_gt + 1;
-        
-        mount_at_boot = ptr;
-        next_gt = strchr(ptr, '>');
-        char *next_lt = strchr(ptr, '<');
-        
-        uuid_str = "";
-        if (next_gt && (!next_lt || next_gt < next_lt)) {
-            *next_gt = '\0';
-            ptr = next_gt + 1;
-            uuid_str = ptr;
-            
-            next_lt = strchr(ptr, '<');
-            if (!next_lt) break;
-            *next_lt = '\0';
-            ptr = next_lt + 1;
-        } else {
-            if (!next_lt) break;
-            *next_lt = '\0';
-            ptr = next_lt + 1;
-        }
+/* "/dev/nvme<N>n<M>" */
+int nvme_valid_disk(const char *s)
+{
+	if (!s || (strncmp(s, "/dev/nvme", 9) != 0))
+		return 0;
+	s += 9;
+	if (!nvme_skip_num(&s) || (*s++ != 'n') || !nvme_skip_num(&s))
+		return 0;
+	return (*s == '\0');
+}
 
-        if (strcmp(mount_path, "/") == 0 || strncmp(partition, "/dev/", 5) != 0) continue;
+/* "/dev/nvme<N>n<M>p<K>" */
+int nvme_valid_partition(const char *s)
+{
+	if (!s || (strncmp(s, "/dev/nvme", 9) != 0))
+		return 0;
+	s += 9;
+	if (!nvme_skip_num(&s) || (*s++ != 'n') || !nvme_skip_num(&s))
+		return 0;
+	if ((*s++ != 'p') || !nvme_skip_num(&s))
+		return 0;
+	return (*s == '\0');
+}
 
-        if (is_stop) {
-            if (umount(mount_path) != 0) {
-                umount2(mount_path, MNT_FORCE); 
-            }
-        } else if (*mount_at_boot == '1') {
-            
-            char active_partition[64];
-            strlcpy(active_partition, partition, sizeof(active_partition));
+/* optional volume label: up to 16 chars of [A-Za-z0-9_.-] */
+int nvme_valid_label(const char *s)
+{
+	size_t n = 0;
 
-            if (uuid_str[0] != '\0') {
-                char resolved_node[64];
-                get_device_by_uuid(uuid_str, resolved_node, sizeof(resolved_node));
-                if (resolved_node[0] != '\0' && strcmp(resolved_node, partition) != 0) {
-                    logmsg(LOG_INFO, "NVMe: Device name change detected for mount %s. Updating from %s to %s", 
-                           mount_path, partition, resolved_node);
-                    strlcpy(active_partition, resolved_node, sizeof(active_partition));
-                    nvram_updated = 1;
-                }
-            } else {
-                char generated_uuid[64];
-                get_partition_metadata(partition, generated_uuid, sizeof(generated_uuid), fstype, sizeof(fstype));
-                if (generated_uuid[0] != '\0') {
-                    uuid_str = generated_uuid;
-                    nvram_updated = 1;
-                    logmsg(LOG_INFO, "NVMe: Appended UUID %s to active mount %s", uuid_str, mount_path);
-                }
-            }
+	if (!s)
+		return 0;
+	for (; *s; ++s, ++n) {
+		if (!isalnum((unsigned char)*s) && (*s != '_') && (*s != '.') && (*s != '-'))
+			return 0;
+	}
+	return (n <= 16);
+}
 
-            if (findmntents(active_partition, 0, NULL, 0) != NULL) {
-                logmsg(LOG_INFO, "NVMe: %s already mounted", active_partition);
-                APPEND_CONFIG_ENTRY(new_cfg, active_partition, mount_path, mount_at_boot, uuid_str);
-                continue;
-            }
-            
-            mkdir_if_none(mount_path);
-            
-            if (uuid_str[0] != '\0' && strcmp(fstype, "auto") == 0) {
-                char dummy_uuid[64];
-                get_partition_metadata(active_partition, dummy_uuid, sizeof(dummy_uuid), fstype, sizeof(fstype));
-            }
+/* optional filesystem UUID: up to 36 chars of [A-Za-z0-9-] (an empty string is valid) */
+static int nvme_valid_uuid(const char *s)
+{
+	size_t n = 0;
 
-            if (strcmp(fstype, "ntfs") == 0 && f_exists("/usr/bin/ntfs-3g")) {
-                int mount_ntfs = -1;
-                if (uuid_str[0] != '\0') {
-                    char ntfs_spec[128];
-                    snprintf(ntfs_spec, sizeof(ntfs_spec), "UUID=%s", uuid_str);
-                    mount_ntfs = eval("ntfs-3g", "-o", "noatime", ntfs_spec, mount_path);
-                }
-                if (mount_ntfs != 0) {
-                    mount_ntfs = eval("ntfs-3g", "-o", "noatime", active_partition, mount_path);
-                }
+	if (!s)
+		return 0;
+	for (; *s; ++s, ++n) {
+		if (!isalnum((unsigned char)*s) && (*s != '-'))
+			return 0;
+	}
+	return (n <= 36);
+}
 
-                if (mount_ntfs == 0)
-                    logmsg(LOG_INFO, "NVMe: Successfully mounted NTFS partition on %s", mount_path);
-                else
-                    logmsg(LOG_ERR, "NVMe: Failed to mount NTFS partition on %s", mount_path);
-                
-                APPEND_CONFIG_ENTRY(new_cfg, active_partition, mount_path, mount_at_boot, uuid_str);
-                continue; 
-            }
-      
-            int mount_res = -1;
-            if (uuid_str[0] != '\0') {
-                char mount_spec[128];
-                snprintf(mount_spec, sizeof(mount_spec), "UUID=%s", uuid_str);
-                mount_res = eval("mount", mount_spec, mount_path, "-o", "noatime,nodiratime", "-t", fstype);
-                if (mount_res == 0) {
-                    logmsg(LOG_INFO, "NVMe: Mounted via stored UUID %s on %s", uuid_str, mount_path);
-                }
-            }
+/* "/opt" or "/mnt/<suffix>": no '..', no trailing '/', limited character set */
+static int nvme_valid_mount_path(const char *s)
+{
+	const char *p;
 
-            if (mount_res != 0) {
-                mount_res = eval("mount", active_partition, mount_path, "-o", "noatime,nodiratime", "-t", fstype);
-                if (mount_res == 0) {
-                    logmsg(LOG_INFO, "NVMe: Mounted via device name fallback %s on %s", active_partition, mount_path);
-                } else {
-                    logmsg(LOG_ERR, "NVMe: Failed to mount %s on %s as %s", active_partition, mount_path, fstype);
-                }
-            }
+	if (!s)
+		return 0;
+	if (strcmp(s, "/opt") == 0)
+		return 1;
+	if ((strncmp(s, "/mnt/", 5) != 0) || (s[5] == '\0') || (strcmp(s, "/mnt/opt") == 0) || (strncmp(s, "/mnt/opt/", 9) == 0))
+		return 0;
+	if (strlen(s) >= sizeof(((rc_nvme_mount_t *)0)->mount_path))
+		return 0;
+	for (p = s; *p; ++p) {
+		if (!isalnum((unsigned char)*p) && (*p != '_') && (*p != '.') && (*p != '-') && (*p != '/'))
+			return 0;
+		if ((*p == '/') && (p[1] == '.') && ((p[2] == '/') || (p[2] == '\0')))
+			return 0;
+	}
+	if ((strstr(s, "..") != NULL) || (strstr(s, "//") != NULL) || (p[-1] == '/'))
+		return 0;
+	return 1;
+}
 
-            APPEND_CONFIG_ENTRY(new_cfg, active_partition, mount_path, mount_at_boot, uuid_str);
-        } else {
-            APPEND_CONFIG_ENTRY(new_cfg, partition, mount_path, mount_at_boot, uuid_str);
-        }
-    }
+int nvme_have_tool(const char *name)
+{
+	static const char *dirs[] = { "/sbin", "/bin", "/usr/sbin", "/usr/bin", NULL };
+	char path[64];
+	int i;
 
-    if (nvram_updated) {
-        nvram_set("nvme_mounts", new_cfg);
-        nvram_commit();
-        logmsg(LOG_INFO, "NVMe: NVRAM nvme_mounts automatically updated and committed.");
-    }
+	for (i = 0; dirs[i]; ++i) {
+		snprintf(path, sizeof(path), "%s/%s", dirs[i], name);
+		if (access(path, X_OK) == 0)
+			return 1;
+	}
+	return 0;
+}
 
-    return 0;
+static int root_is_readonly(void)
+{
+	struct statvfs sfs;
+
+	if (statvfs("/", &sfs) == 0)
+		return ((sfs.f_flag & ST_RDONLY) != 0);
+	return (access("/", W_OK) != 0);
+}
+
+static int is_path_mounted(const char *dir)
+{
+	FILE *fp;
+	struct mntent *mnt;
+	int mounted = 0;
+
+	if ((fp = setmntent("/proc/mounts", "r")) == NULL)
+		return 0;
+	while ((mnt = getmntent(fp)) != NULL) {
+		if (strcmp(mnt->mnt_dir, dir) == 0) {
+			mounted = 1;
+			break;
+		}
+	}
+	endmntent(fp);
+	return mounted;
+}
+
+static int is_dev_mounted_at(const char *dev, const char *dir)
+{
+	FILE *fp;
+	struct mntent *mnt;
+	int mounted = 0;
+
+	if ((fp = setmntent("/proc/mounts", "r")) == NULL)
+		return 0;
+	while ((mnt = getmntent(fp)) != NULL) {
+		if ((strcmp(mnt->mnt_fsname, dev) == 0) && (strcmp(mnt->mnt_dir, dir) == 0)) {
+			mounted = 1;
+			break;
+		}
+	}
+	endmntent(fp);
+	return mounted;
+}
+
+/* Unmount any active mountpoints of dev other than keep1 / keep2 (in reverse /proc/mounts order so bind mounts unmount first).
+ * Returns 0 on success, -1 if an old mountpoint was busy and could not be unmounted. */
+static int nvme_unmount_dev_except(const char *dev, const char *keep1, const char *keep2)
+{
+	FILE *fp;
+	struct mntent *mnt;
+	char dirs[NVME_MAX_MOUNTS * 2][128];
+	int dcount = 0, i, rc = 0;
+
+	if ((fp = setmntent("/proc/mounts", "r")) == NULL)
+		return 0;
+	while (((mnt = getmntent(fp)) != NULL) && (dcount < (int)(sizeof(dirs) / sizeof(dirs[0])))) {
+		if (strcmp(mnt->mnt_fsname, dev) != 0)
+			continue;
+		if ((keep1 && (strcmp(mnt->mnt_dir, keep1) == 0)) ||
+		    (keep2 && (strcmp(mnt->mnt_dir, keep2) == 0)))
+			continue;
+		strlcpy(dirs[dcount++], mnt->mnt_dir, sizeof(dirs[0]));
+	}
+	endmntent(fp);
+
+	for (i = dcount - 1; i >= 0; --i) {
+		if ((umount(dirs[i]) != 0) && (umount2(dirs[i], MNT_FORCE) != 0)) {
+			logmsg(LOG_ERR, "nvme: %s is busy on %s, cannot unmount", dev, dirs[i]);
+			rc = -1;
+			break;
+		}
+		if (strncmp(dirs[i], "/mnt/", 5) == 0)
+			rmdir(dirs[i]);
+	}
+	return rc;
+}
+
+int nvme_unmount_partition(const char *dev)
+{
+	return nvme_unmount_dev_except(dev, NULL, NULL);
+}
+
+/* If dir is currently mounted by an NVMe partition other than keep_dev (e.g. a partition whose mount
+ * path was cleared or reassigned), unmount that NVMe partition so the new partition can use dir. */
+static void nvme_unmount_nvme_at_path(const char *dir, const char *keep_dev)
+{
+	FILE *fp;
+	struct mntent *mnt;
+	char other_dev[64] = {0};
+
+	if ((fp = setmntent("/proc/mounts", "r")) == NULL)
+		return;
+	while ((mnt = getmntent(fp)) != NULL) {
+		if ((strcmp(mnt->mnt_dir, dir) == 0) &&
+		    nvme_valid_partition(mnt->mnt_fsname) &&
+		    (!keep_dev || (strcmp(mnt->mnt_fsname, keep_dev) != 0))) {
+			strlcpy(other_dev, mnt->mnt_fsname, sizeof(other_dev));
+			break;
+		}
+	}
+	endmntent(fp);
+
+	if (other_dev[0] != '\0')
+		nvme_unmount_partition(other_dev);
+}
+
+/* Match a saved nvme_mounts record (rec_dev, rec_uuid) against a partition (dev, uuid).
+ * Prefer UUID comparison whenever both UUIDs are present so device-node renumbering does not
+ * overwrite or delete a different partition's mount configuration. */
+int nvme_record_matches(const char *rec_dev, const char *rec_uuid, const char *dev, const char *uuid)
+{
+	if (uuid && (uuid[0] != '\0') && rec_uuid && (rec_uuid[0] != '\0'))
+		return (strcmp(rec_uuid, uuid) == 0);
+
+	if (rec_uuid && (rec_uuid[0] != '\0')) {
+		char resolved[64];
+		blkid_cache_loaded = 0;
+		if (nvme_find_by_uuid(rec_uuid, resolved, sizeof(resolved)))
+			return 0;
+	}
+
+	return (rec_dev && dev && (strcmp(rec_dev, dev) == 0));
+}
+
+void nvme_get_partition_uuid(const char *dev_node, char *out_uuid, size_t uuid_len)
+{
+	FILE *pipe_fp;
+	char cmd[128], line[512];
+
+	out_uuid[0] = '\0';
+	if (!nvme_valid_partition(dev_node))
+		return;
+
+	snprintf(cmd, sizeof(cmd), "blkid %s", dev_node);
+	if ((pipe_fp = popen(cmd, "r")) == NULL)
+		return;
+
+	if (fgets(line, sizeof(line), pipe_fp) != NULL)
+		nvme_blkid_attr(line, "UUID", out_uuid, uuid_len);
+
+	pclose(pipe_fp);
+}
+
+void nvme_set_error(const char *msg)
+{
+	if (!msg || (*msg == '\0')) {
+		unlink(NVME_ERR_FILE);
+		return;
+	}
+	f_write_string(NVME_ERR_FILE, msg, 0, 0600);
+}
+
+/* record format: <device>><mount path>><mount at boot>[><uuid>]< (repeated); invalid records are skipped */
+static void parse_rc_nvme_mounts(const char *data)
+{
+	char *buf, *ptr, *rec, *dev, *path, *boot, *uuid;
+	int i, dup;
+
+	rc_nvme_mounts_count = 0;
+	if (!data || (*data == '\0'))
+		return;
+
+	/* never modify the nvram string in place */
+	if ((buf = strdup(data)) == NULL)
+		return;
+
+	ptr = buf;
+	while ((rc_nvme_mounts_count < NVME_MAX_MOUNTS) && ((rec = strsep(&ptr, "<")) != NULL)) {
+		if (*rec == '\0')
+			continue;
+
+		dev = strsep(&rec, ">");
+		path = strsep(&rec, ">");
+		boot = strsep(&rec, ">");
+		uuid = strsep(&rec, ">");
+		if (!uuid)
+			uuid = "";
+
+		if (!dev || !path || !boot || !nvme_valid_partition(dev) || !nvme_valid_mount_path(path) || !nvme_valid_uuid(uuid)) {
+			logmsg(LOG_WARNING, "nvme: ignoring invalid mount entry");
+			continue;
+		}
+
+		for (dup = 0, i = 0; i < rc_nvme_mounts_count; ++i) {
+			if ((strcmp(rc_nvme_mounts[i].device, dev) == 0) || (strcmp(rc_nvme_mounts[i].mount_path, path) == 0)) {
+				dup = 1;
+				break;
+			}
+		}
+		if (dup) {
+			logmsg(LOG_WARNING, "nvme: ignoring duplicate mount entry (%s -> %s)", dev, path);
+			continue;
+		}
+
+		strlcpy(rc_nvme_mounts[rc_nvme_mounts_count].device, dev, sizeof(rc_nvme_mounts[0].device));
+		strlcpy(rc_nvme_mounts[rc_nvme_mounts_count].mount_path, path, sizeof(rc_nvme_mounts[0].mount_path));
+		strlcpy(rc_nvme_mounts[rc_nvme_mounts_count].uuid, uuid, sizeof(rc_nvme_mounts[0].uuid));
+		rc_nvme_mounts[rc_nvme_mounts_count].mount_at_boot = (*boot == '1');
+		rc_nvme_mounts_count++;
+	}
+
+	free(buf);
+}
+
+static void nvme_set_busy(int on)
+{
+	if (on) {
+		char pid_s[16];
+		snprintf(pid_s, sizeof(pid_s), "%d\n", (int)getpid());
+		f_write_string(NVME_BUSY_FILE, pid_s, 0, 0600);
+	}
+	else
+		unlink(NVME_BUSY_FILE);
+}
+
+int nvme_main(int argc, char *argv[])
+{
+	int rc;
+	int i, waited = 0, is_stop;
+	char resolved_devs[NVME_MAX_MOUNTS][64];
+	int entry_valid[NVME_MAX_MOUNTS];
+
+	/* nvme format <partition> <fs> [label] / nvme partition <disk> <size_mb> [label] (started by nvmecmd.cgi) */
+	if ((argc >= 4) && (strcmp(argv[1], "format") == 0)) {
+		unlink(NVME_ERR_FILE);
+		nvme_set_busy(1);
+		rc = nvme_execute_format(argv[2], argv[3], (argc >= 5) ? argv[4] : "");
+		if ((rc != 0) && !f_exists(NVME_ERR_FILE))
+			nvme_set_error("Failed to format partition.");
+		nvme_set_busy(0);
+		return rc;
+	}
+	if ((argc >= 4) && (strcmp(argv[1], "partition") == 0)) {
+		unlink(NVME_ERR_FILE);
+		nvme_set_busy(1);
+		rc = nvme_execute_partition(argv[2], argv[3], (argc >= 5) ? argv[4] : "");
+		if ((rc != 0) && !f_exists(NVME_ERR_FILE))
+			nvme_set_error("Failed to create partition.");
+		nvme_set_busy(0);
+		return rc;
+	}
+	if ((argc >= 3) && (strcmp(argv[1], "delete") == 0)) {
+		unlink(NVME_ERR_FILE);
+		nvme_set_busy(1);
+		rc = nvme_execute_delete(argv[2]);
+		if ((rc != 0) && !f_exists(NVME_ERR_FILE))
+			nvme_set_error("Failed to delete partition.");
+		nvme_set_busy(0);
+		return rc;
+	}
+
+	parse_rc_nvme_mounts(nvram_safe_get("nvme_mounts"));
+	is_stop = ((argc >= 2) && (strcmp(argv[1], "stop") == 0));
+	blkid_cache_loaded = 0;
+
+	if (is_stop) {
+		FILE *fp;
+		struct mntent *mnt;
+
+		sync();
+		if ((fp = setmntent("/proc/mounts", "r")) != NULL) {
+			char dirs[NVME_MAX_MOUNTS * 2][128];
+			int dcount = 0;
+			while (((mnt = getmntent(fp)) != NULL) && (dcount < (int)(sizeof(dirs) / sizeof(dirs[0])))) {
+				if (nvme_valid_partition(mnt->mnt_fsname))
+					strlcpy(dirs[dcount++], mnt->mnt_dir, sizeof(dirs[0]));
+			}
+			endmntent(fp);
+			for (i = dcount - 1; i >= 0; i--) {
+				if ((umount(dirs[i]) != 0) && (umount2(dirs[i], MNT_FORCE) != 0) && (umount2(dirs[i], MNT_DETACH) != 0))
+					logmsg(LOG_DEBUG, "nvme: %s was not unmounted (not mounted or busy)", dirs[i]);
+				else if (strncmp(dirs[i], "/mnt/", 5) == 0)
+					rmdir(dirs[i]);
+			}
+		}
+		return 0;
+	}
+
+	/* First pass: resolve device nodes by UUID and unmount any old/changed mountpoints across all
+	 * configured entries before mounting, so swapping or reassigning paths between partitions works. */
+	for (i = 0; i < rc_nvme_mounts_count; i++) {
+		char partition[64];
+		const char *mount_path = rc_nvme_mounts[i].mount_path;
+		const char *target_dir;
+		int is_opt, ro_root, has_uuid, found_uuid = 0;
+
+		entry_valid[i] = 0;
+		strlcpy(partition, rc_nvme_mounts[i].device, sizeof(partition));
+		is_opt = (strcmp(mount_path, "/opt") == 0);
+		ro_root = is_opt ? root_is_readonly() : 0;
+		target_dir = (is_opt && ro_root) ? "/mnt/opt" : mount_path;
+		has_uuid = (rc_nvme_mounts[i].uuid[0] != '\0');
+
+		/* device numbering can change between boots: prefer the filesystem UUID when it is known */
+		if (has_uuid) {
+			char resolved[64];
+			if (nvme_find_by_uuid(rc_nvme_mounts[i].uuid, resolved, sizeof(resolved))) {
+				found_uuid = 1;
+				if (strcmp(resolved, partition) != 0) {
+					logmsg(LOG_INFO, "nvme: UUID %s is now %s (was %s)", rc_nvme_mounts[i].uuid, resolved, partition);
+					strlcpy(partition, resolved, sizeof(partition));
+				}
+			}
+		}
+
+		/* the device node may not exist yet right after boot; wait a little (once for all mounts) */
+		while (rc_nvme_mounts[i].mount_at_boot && (has_uuid ? !found_uuid : !f_exists(partition)) && (waited < NVME_DEVICE_WAIT_SECS)) {
+			sleep(1);
+			waited++;
+			blkid_cache_loaded = 0;
+			if (has_uuid) {
+				char resolved[64];
+				if (nvme_find_by_uuid(rc_nvme_mounts[i].uuid, resolved, sizeof(resolved))) {
+					found_uuid = 1;
+					if (strcmp(resolved, partition) != 0) {
+						logmsg(LOG_INFO, "nvme: UUID %s is now %s (was %s)", rc_nvme_mounts[i].uuid, resolved, partition);
+						strlcpy(partition, resolved, sizeof(partition));
+					}
+				}
+			}
+		}
+
+		strlcpy(resolved_devs[i], partition, sizeof(resolved_devs[0]));
+
+		if (!f_exists(partition)) {
+			if (rc_nvme_mounts[i].mount_at_boot)
+				logmsg(LOG_ERR, "nvme: %s not found, cannot mount on %s", partition, mount_path);
+			continue;
+		}
+		if (has_uuid && !found_uuid && nvme_uuid_mismatch(partition, rc_nvme_mounts[i].uuid)) {
+			if (rc_nvme_mounts[i].mount_at_boot)
+				logmsg(LOG_ERR, "nvme: UUID %s not found (%s has a different UUID), cannot mount on %s",
+				       rc_nvme_mounts[i].uuid, partition, mount_path);
+			continue;
+		}
+
+		/* If the user changed this partition's mount path, unmount its previous mountpoint(s) */
+		if (nvme_unmount_dev_except(partition, target_dir, (is_opt && ro_root) ? "/opt" : NULL) != 0)
+			continue;
+
+		entry_valid[i] = 1;
+	}
+
+	/* Second pass: mount all enabled entries. */
+	for (i = 0; i < rc_nvme_mounts_count; i++) {
+		char partition[64], mount_path[128], fstype[16];
+		const char *target_dir;
+		int is_opt, ro_root;
+
+		if (!rc_nvme_mounts[i].mount_at_boot || !entry_valid[i])
+			continue;
+
+		strlcpy(partition, resolved_devs[i], sizeof(partition));
+		strlcpy(mount_path, rc_nvme_mounts[i].mount_path, sizeof(mount_path));
+		is_opt = (strcmp(mount_path, "/opt") == 0);
+		ro_root = is_opt ? root_is_readonly() : 0;
+		target_dir = (is_opt && ro_root) ? "/mnt/opt" : mount_path;
+
+		if (!is_dev_mounted_at(partition, target_dir)) {
+			/* If another NVMe partition whose mount path was cleared was occupying this target path, unmount it first */
+			if (is_opt)
+				nvme_unmount_nvme_at_path("/opt", partition);
+			nvme_unmount_nvme_at_path(target_dir, partition);
+
+			if (is_opt && !is_dev_mounted_at(partition, "/opt") && is_path_mounted("/opt")) {
+				logmsg(LOG_ERR, "nvme: /opt is already mounted, cannot mount %s", partition);
+				continue;
+			}
+			if (is_path_mounted(target_dir)) {
+				logmsg(LOG_ERR, "nvme: %s is already mounted, cannot mount %s", target_dir, partition);
+				continue;
+			}
+
+			get_partition_metadata(partition, fstype, sizeof(fstype));
+			if (strcmp(fstype, "auto") == 0) {
+				logmsg(LOG_ERR, "nvme: no filesystem found on %s, cannot mount on %s", partition, target_dir);
+				continue;
+			}
+
+			mkdir_if_none(target_dir);
+
+			/* Tomato64 mounts NTFS with the in-kernel ntfs3 driver (as in usb.c); ntfs-3g is not guaranteed to be installed.
+			 * blkid reports the type as "ntfs". */
+			if (strcmp(fstype, "ntfs") == 0)
+				strlcpy(fstype, "ntfs3", sizeof(fstype));
+
+			rc = eval("mount", "-t", fstype, "-o", "noatime,nodiratime", partition, (char *)target_dir, NULL);
+			if (rc != 0) {
+				logmsg(LOG_ERR, "nvme: failed to mount %s on %s (%s, exit code %d)", partition, target_dir, fstype, rc);
+				if (strncmp(target_dir, "/mnt/", 5) == 0)
+					rmdir(target_dir);
+				continue;
+			}
+			logmsg(LOG_INFO, "nvme: mounted %s on %s", partition, target_dir);
+		}
+
+		if (is_opt && ro_root && !is_dev_mounted_at(partition, "/opt")) {
+			nvme_unmount_nvme_at_path("/opt", partition);
+			if (is_path_mounted("/opt")) {
+				logmsg(LOG_ERR, "nvme: /opt is already mounted, cannot bind mount %s", partition);
+				continue;
+			}
+			rc = eval("mount", "-o", "bind", "/mnt/opt", "/opt", NULL);
+			if (rc != 0) {
+				logmsg(LOG_ERR, "nvme: failed to bind mount /mnt/opt on /opt (exit code %d)", rc);
+				if ((umount("/mnt/opt") == 0) || (umount2("/mnt/opt", MNT_FORCE) == 0))
+					rmdir("/mnt/opt");
+			}
+			else
+				logmsg(LOG_INFO, "nvme: bind mounted /mnt/opt on /opt for %s", partition);
+		}
+	}
+
+	return 0;
+}
+
+void start_nvme(void)
+{
+	char *argv[] = { "nvme", "start", NULL };
+	logmsg(LOG_INFO, "starting nvme storage...");
+	nvme_main(2, argv);
+}
+
+void stop_nvme(void)
+{
+	char *argv[] = { "nvme", "stop", NULL };
+	logmsg(LOG_INFO, "stopping nvme storage...");
+	nvme_main(2, argv);
 }

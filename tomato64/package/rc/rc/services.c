@@ -2241,21 +2241,6 @@ static void start_cstats(int new)
 	}
 }
 
-void start_nvme(void)
-{
-	logmsg(LOG_INFO, "starting nvme storage...");
-	// Runs the compiled applet block with a NULL parameter to trigger the mount loops
-	nvme_main(0, NULL); 
-}
-
-void stop_nvme(void)
-{
-	char *stop_argv[] = { "nvme", "stop", NULL };
-	logmsg(LOG_INFO, "stopping nvme storage...");
-	// Passes the 'stop' argument array down into the execution engine
-	nvme_main(2, stop_argv); 
-}
-
 #ifdef TCONFIG_MEDIA_SERVER
 static void start_media_server(int force)
 {
@@ -2580,6 +2565,7 @@ void start_services(void)
 #ifdef TCONFIG_SDHC
 	start_mmc();
 #endif
+	start_nvme();
 	start_dnsmasq();
 #ifdef TCONFIG_MDNS
 	start_mdns();
@@ -2649,7 +2635,6 @@ void start_services(void)
 #ifdef TCONFIG_IRQBALANCE
 	start_irqbalance();
 #endif
-	start_nvme();
 }
 
 void stop_services(void)
@@ -3123,6 +3108,7 @@ static int svc_exec_simple(const struct svc_entry *svc, const char *service, int
 				remove_storage_main(1);
 				stop_usb();
 #endif /* TCONFIG_USB */
+				stop_nvme();
 #endif /* TOMATO64_MT3600BE || TOMATO64_BCM53XX */
 			}
 			return 1;
@@ -3162,6 +3148,7 @@ static int svc_exec_simple(const struct svc_entry *svc, const char *service, int
 				remove_storage_main(1);
 				stop_usb();
 #endif
+				stop_nvme();
 				sync();
 			}
 			return 1;

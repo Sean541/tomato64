@@ -1,0 +1,148 @@
+/* --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- */
+/* NVMe Storage Module Stylesheet (Tomato64 Theme-Adaptive)        */
+/* --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- */
+
+/* --- Dynamic Theme Modal Overlays --- */
+#format-modal-overlay, #partition-modal-overlay, #delete-modal-overlay {
+	display: none;
+	position: fixed;
+	top: 0; left: 0; width: 100%; height: 100%;
+	background: rgba(0,0,0,0.6);
+	z-index: 1000;
+	justify-content: center;
+	align-items: center;
+}
+#format-modal-box, #partition-modal-box, #delete-modal-box {
+	width: 420px;
+	background-color: #f0f0f0;
+	border: 2px solid rgba(128, 128, 128, 0.9);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
+	border-radius: 4px;
+	overflow: hidden;
+}
+#format-modal-box .section-title, #partition-modal-box .section-title, #delete-modal-box .section-title {
+	margin-bottom: 0 !important;
+	border-bottom: none;
+	background: transparent;
+}
+#format-modal-box .section, #partition-modal-box .section, #delete-modal-box .section {
+	margin-top: 0 !important;
+	padding: 15px;
+	background: transparent;
+}
+#format-modal-box .field-row, #partition-modal-box .field-row, #delete-modal-box .field-row {
+	margin-bottom: 12px;
+	display: flex;
+	align-items: center;
+}
+#format-modal-box label, #partition-modal-box label, #delete-modal-box label {
+	width: 130px;
+	font-weight: bold;
+}
+#format-modal-box select, #format-modal-box input[type="text"], #partition-modal-box input[type="text"] {
+	flex: 1;
+	padding: 3px;
+}
+#delete-modal-box input[type="text"] {
+	padding: 3px;
+}
+#format-modal-box .buttons, #partition-modal-box .buttons, #delete-modal-box .buttons {
+	text-align: right;
+	padding-top: 10px;
+	border-top: 1px solid rgba(128,128,128,0.3);
+	margin-top: 10px;
+}
+
+/* --- Component Layout & Typography Classes --- */
+.disk-header-btn {
+	display: inline-block;
+	margin-left: 5px;
+	padding: 1px 8px !important;
+	font-size: 75%;
+	vertical-align: middle;
+	margin-top: -8px;
+}
+.disk-info-subtitle {
+	font-weight: normal;
+	font-size: 90%;
+	opacity: 0.99;
+	margin-top: 2px;
+}
+.modal-code-text {
+	font-weight: bold;
+	font-family: monospace;
+}
+.modal-space-info {
+	font-size: 90%;
+}
+.grid-prefix {
+	opacity: 0.7;
+	padding-right: 2px;
+}
+.tomato-grid input[type="button"].btn-action-left,
+.tomato-grid input[type="button"].btn-formatting {
+	float: left;
+	margin-right: 4px !important;
+	white-space: pre-line !important;
+	font-size: 11px !important;
+	line-height: 12px !important;
+	padding: 6px 15px 6px 40px !important;
+	width: auto !important;
+	background-position: 12px !important;
+	background-repeat: no-repeat !important;
+	background-size: 18px 18px !important;
+	background-origin: border-box !important;
+}
+.tomato-grid input[type="button"][value^="Delete"],
+#delete-modal-box input[type="button"][value^="Delete"] {
+	background-image: var(--icon-button-delete) !important;
+	background-position: 12px !important;
+	background-repeat: no-repeat !important;
+	background-size: 18px 18px !important;
+	background-origin: border-box !important;
+}
+
+/* --- NVMe Storage Grid Layout --- */
+.tomato-grid table {
+	table-layout: fixed;
+	width: 100%;
+}
+.tomato-grid th:nth-child(1), .tomato-grid td:nth-child(1) { width: 17%; text-align: center; } /* Partition */
+.tomato-grid th:nth-child(2), .tomato-grid td:nth-child(2) { width: 22%; text-align: center; } /* Labels ( P / V ) */
+.tomato-grid th:nth-child(3), .tomato-grid td:nth-child(3) { width: 18%; text-align: center; } /* Size / FS Type */
+.tomato-grid th:nth-child(4), .tomato-grid td:nth-child(4) { width: 28%; text-align: center; } /* Mount Path */
+.tomato-grid th:nth-child(5), .tomato-grid td:nth-child(5) { width: 15%; text-align: center; } /* Auto Mount */
+
+/* --- Center Auto Mount Checkboxes & Header (Column 5) --- */
+.tomato-grid th:nth-child(5),
+.tomato-grid td:nth-child(5) {
+	text-align: center !important;
+}
+.tomato-grid td:nth-child(5) input[type="checkbox"] {
+	display: inline-block;
+	margin: 0 auto;
+	float: none;
+}
+
+/* --- Ensure the action cell can fit all buttons without wrapping --- */
+.tomato-grid td:last-child {
+	min-width: 300px;
+	white-space: nowrap;
+	text-align: right;
+}
+
+/* --- Non-Edit Rows: Truncation --- */
+.tomato-grid tr:not(.editing) td {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tomato-grid tr.editing td {
+	overflow: visible;
+}
+
+.tomato-grid td input[type="text"] {
+	width: 20ch;
+	box-sizing: border-box;
+}

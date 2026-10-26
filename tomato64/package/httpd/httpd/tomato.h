@@ -238,18 +238,9 @@ extern void wo_ttcprun(char *url);
 extern void wo_ttcpkill(char *url);
 
 /* nvme.c */
-typedef struct {
-    char device[32];
-    char mount_path[64];
-    int mount_at_boot;
-} nvme_mount_t;
-
-extern nvme_mount_t nvme_mounts[16];
-extern int nvme_mounts_count;
-
-int parse_nvme_mounts(const char *data);
-int save_nvme_mounts(void);
 extern void asp_nvme_disks(int argc, char **argv);
+extern int nvme_mounts_valid(const char *data);
+extern void wo_nvmecommand(char *url);
 
 
 #endif

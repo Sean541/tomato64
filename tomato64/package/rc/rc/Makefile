@@ -95,7 +95,7 @@ OBJS := rc.o init.o interface.o network.o wan.o services.o dhcp.o \
 	firewall.o ppp.o telssh.o listen.o redial.o \
 	led.o qos.o forward.o misc.o restrict.o \
 	gpio.o sched.o bwlimit.o arpbind.o tomatoanon.o mwan.o pbr.o \
-	dnsmasq.o format.o nvme.o
+	dnsmasq.o format.o nvme.o nvme_format.o nvme_partition.o
 
 OBJS += wifi.o
 OBJS += quotas.o
