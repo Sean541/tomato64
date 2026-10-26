@@ -244,12 +244,23 @@ int nvme_execute_partition(const char *disk_arg, const char *size_str, const cha
 	else
 		snprintf(range_s, sizeof(range_s), "0:0:+%ldM", size_mb);
 
-	if (label[0] != '\0') {
+	if (label[0] != '\0')
 		snprintf(cname_s, sizeof(cname_s), "0:%s", label);
-		ret = eval("sgdisk", "-n", range_s, "-t", "0:8300", "-c", cname_s, (char *)disk_arg, NULL);
+
+	/* If the drive currently has no partitions, instruct sgdisk to initialize
+	 * a fresh GPT layout (-o) so it does not fail with exit code 3 on blank/non-GPT disks. */
+	if (part_count == 0) {
+		if (label[0] != '\0')
+			ret = eval("sgdisk", "-o", "-n", range_s, "-t", "0:8300", "-c", cname_s, (char *)disk_arg);
+		else
+			ret = eval("sgdisk", "-o", "-n", range_s, "-t", "0:8300", (char *)disk_arg);
 	}
-	else
-		ret = eval("sgdisk", "-n", range_s, "-t", "0:8300", (char *)disk_arg, NULL);
+	else {
+		if (label[0] != '\0')
+			ret = eval("sgdisk", "-n", range_s, "-t", "0:8300", "-c", cname_s, (char *)disk_arg);
+		else
+			ret = eval("sgdisk", "-n", range_s, "-t", "0:8300", (char *)disk_arg);
+	}
 
 	if (ret != 0) {
 		logmsg(LOG_ERR, "nvme: failed to create partition on %s (exit code %d).", disk_arg, ret);
