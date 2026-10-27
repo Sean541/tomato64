@@ -74,6 +74,7 @@ function nvmeSaveDraft(excludeDev) {
 			var editDev = (g.isEditing() && g.source) ? ('' + g.source.getRowData()[0]) : '';
 			var rows = g.getAllData();
 			for (var j = 0; j < rows.length; ++j) {
+				if (rows[j][6] == 1) continue;
 				var dev = '' + (rows[j][0] || '');
 				var path = rows[j][3] || '';
 				var boot = (rows[j][4] == 1) ? 1 : 0;
@@ -134,13 +135,19 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 			var cell = controls.querySelector('td:last-child') || controls.lastElementChild;
 			if (cell && !cell.querySelector('.btn-formatting')) {
 				var dev = this.source ? this.source.getRowData()[0] : '';
+				var d = this.source ? this.source.getRowData() : null;
+				var is_foreign = (d && d[6] == 1);
 				var nativeDel = cell.querySelector('input[value="Delete"]');
 				if (nativeDel) nativeDel.style.display = 'none';
 				var bFmt = document.createElement('input');
 				bFmt.type = 'button';
 				bFmt.value = 'Format\nPartition';
 				bFmt.className = 'btn btn-danger btn-formatting btn-action-left';
-				if (nvme_fs && nvme_fs.length) bFmt.onclick = function() {
+				if (is_foreign) {
+					bFmt.disabled = true;
+					bFmt.title = 'Partition is mounted by the system (' + (d[5] || '') + ')';
+				}
+				else if (nvme_fs && nvme_fs.length) bFmt.onclick = function() {
 					triggerFormat(dev);
 				};
 				else {
@@ -152,7 +159,11 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 				bDel.type = 'button';
 				bDel.value = 'Delete\nPartition';
 				bDel.className = 'btn btn-danger btn-formatting btn-action-left';
-				if (nvme_can_partition) bDel.onclick = function() {
+				if (is_foreign) {
+					bDel.disabled = true;
+					bDel.title = 'Partition is mounted by the system (' + (d[5] || '') + ')';
+				}
+				else if (nvme_can_partition) bDel.onclick = function() {
 					triggerDelete(dev);
 				};
 				else {
@@ -166,16 +177,22 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 		return controls;
 	};
 	g.verifyFields = function(row, quiet) {
+		var o = this.source ? this.source.getRowData() : null;
+		if (o && o[6] == 1) return 1;
 		var f = fields.getAll(row);
-		if (!f || f.length < 1) return 1;
+		if (!f || f.length < 2) return 1;
+		var boot = f[1].checked;
 		var s = f[0].value.trim();
 		if (!quiet) f[0].value = s;
 		var pfx = f[0].parentNode ? f[0].parentNode.querySelector('.grid-prefix') : null;
 		if (pfx) pfx.textContent = (s == 'opt') ? '/' : '/mnt/';
-		if (s == '') {
+		if (!boot) {
 			ferror.clear(f[0]);
-			if (f[1] && f[1].checked) f[1].checked = false;
 			return 1;
+		}
+		if (s == '') {
+			ferror.set(f[0], 'Mount path is required when Auto Mount is enabled.', quiet);
+			return 0;
 		}
 		if (s.length > 20 || !mountPathRe.test(s)) {
 			ferror.set(f[0], 'Invalid mount path. Only the characters "A-Z a-z 0-9 _ . - /" are allowed (maximum 20 characters).', quiet);
@@ -193,6 +210,7 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 			var gOther = nvmeGrids[i];
 			var d = gOther.getAllData();
 			for (var j = 0; j < d.length; ++j) {
+				if (d[j][6] == 1) continue;
 				if (d[j][3] == s) {
 					ferror.set(f[0], 'Duplicate mount path: ' + ((s == 'opt') ? '/opt' : '/mnt/' + s), quiet);
 					return 0;
@@ -216,10 +234,65 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 		}
 		TomatoGrid.prototype.edit.call(this, row);
 		if (this.editor) {
+			var d = this.source ? this.source.getRowData() : null;
 			var f = fields.getAll(this.editor);
-			if (f && f[0]) {
+			if (d && d[6] == 1) {
+				if (f && f[0]) {
+					f[0].value = d[5] || d[3] || '';
+					f[0].disabled = true;
+					f[0].style.color = '#888';
+					f[0].style.backgroundColor = '#e9ecef';
+					f[0].style.cursor = 'not-allowed';
+					var pfx = f[0].parentNode ? f[0].parentNode.querySelector('.grid-prefix') : null;
+					if (pfx) pfx.style.display = 'none';
+				}
+				if (f && f[1]) {
+					f[1].checked = false;
+					f[1].disabled = true;
+					f[1].style.cursor = 'not-allowed';
+				}
+			} else if (f && f[0] && f[1]) {
 				var pfx = f[0].parentNode ? f[0].parentNode.querySelector('.grid-prefix') : null;
-				if (pfx) pfx.textContent = (f[0].value.trim() == 'opt') ? '/' : '/mnt/';
+				if (pfx) {
+					pfx.style.display = '';
+					pfx.textContent = (f[0].value.trim() == 'opt') ? '/' : '/mnt/';
+				}
+				f[0].oninput = function() {
+					if (pfx) pfx.textContent = (f[0].value.trim() == 'opt') ? '/' : '/mnt/';
+				};
+				var updateMountState = function() {
+					if (f[1].checked) {
+						f[0].disabled = false;
+						f[0].style.color = '';
+						f[0].style.backgroundColor = '';
+						f[0].style.cursor = '';
+						f[0].focus();
+					} else {
+						f[0].disabled = true;
+						f[0].value = '';
+						f[0].style.color = '#888';
+						f[0].style.backgroundColor = '#e9ecef';
+						f[0].style.cursor = 'not-allowed';
+						ferror.clear(f[0]);
+						if (pfx) pfx.textContent = '/mnt/';
+					}
+				};
+				f[1].onclick = updateMountState;
+				f[1].onchange = updateMountState;
+
+				if (!f[1].checked) {
+					f[0].disabled = true;
+					f[0].value = '';
+					f[0].style.color = '#888';
+					f[0].style.backgroundColor = '#e9ecef';
+					f[0].style.cursor = 'not-allowed';
+					f[1].focus();
+				} else {
+					f[0].disabled = false;
+					f[0].style.color = '';
+					f[0].style.backgroundColor = '';
+					f[0].style.cursor = '';
+				}
 			}
 		}
 	};
@@ -227,21 +300,39 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 		return [data[0], data[1], data[2], data[3], (data[4] == 1) ? 'checked' : ''];
 	};
 	g.fieldValuesToData = function(row) {
-		var f = fields.getAll(row);
 		var o = this.source ? this.source.getRowData() : [];
-		var p = f[0] ? f[0].value.trim() : '';
-		var b = (f[1] && f[1].checked && p != '') ? 1 : 0;
-		return [o[0] || '', o[1] || '', o[2] || '', p, b];
+		if (o && o[6] == 1) {
+			return [o[0] || '', o[1] || '', o[2] || '', o[3] || '', 0, o[5] || '', 1];
+		}
+		var f = fields.getAll(row);
+		var b = (f[1] && f[1].checked) ? 1 : 0;
+		var p = (b && f[0]) ? f[0].value.trim() : '';
+		return [o[0] || '', o[1] || '', o[2] || '', p, (p != '' ? b : 0), o[5] || '', 0];
 	};
 	g.dataToView = function(data) {
 		var p = data[3] || '';
+		var is_foreign = (data[6] == 1);
+		var mpText;
+		if (is_foreign) {
+			mpText = '<span class="text-muted" style="color:#888;">' + escapeHTML(data[5] || p) + ' <small><i>(system)<\/i><\/small><\/span>';
+		} else if (p != '') {
+			mpText = (p == 'opt') ? '/opt' : '/mnt/' + escapeHTML(p);
+		} else {
+			mpText = '';
+		}
+		var bootText;
+		if (is_foreign) {
+			bootText = '<span class="text-muted" style="color:#888;">Disabled<\/span>';
+		} else {
+			bootText = (data[4] == 1) ? '<b>Enabled<\/b>' : 'Disabled';
+		}
 		return [
-escapeHTML('' + (data[0] || '')),
-escapeHTML('' + (data[1] || 'none / none')),
-escapeHTML('' + (data[2] || '')),
-(p != '') ? ((p == 'opt') ? '/opt' : '/mnt/' + escapeHTML(p)) : '',
-(data[4] == 1) ? '<b>Enabled<\/b>' : 'Disabled'
-];
+			escapeHTML('' + (data[0] || '')),
+			escapeHTML('' + (data[1] || 'none / none')),
+			escapeHTML('' + (data[2] || '')),
+			mpText,
+			bootText
+		];
 	};
 	g.recolor = function() {};
 	for (var k = 0; k < partitions.length; ++k) {
@@ -249,19 +340,25 @@ escapeHTML('' + (data[2] || '')),
 		var dev_node = '/dev/' + part[0];
 		var uuid = part[4] || '';
 		var fstype = part[3] || 'Unknown';
+		var active_mp = part[6] || '';
 		nvmeUuid[dev_node] = uuid;
 		var byDev = saved_mounts[part[0]];
 		var saved = ((uuid != '') ? saved_by_uuid[uuid] : null) || ((byDev && (!byDev.uuid || !present_uuids[byDev.uuid])) ? byDev : null) || {
 			path: '',
 			boot: 0
 		};
+		var expected_mp = (saved.path != '') ? ((saved.path == 'opt') ? '/opt' : ('/mnt/' + saved.path)) : '';
+		var is_our_mount = (active_mp != '' && saved.boot == 1 && (active_mp == expected_mp || (saved.path == 'opt' && active_mp == '/mnt/opt')));
+		var is_foreign = (active_mp != '' && !is_our_mount) ? 1 : 0;
 		g.insertData(-1, [
-dev_node,
-((part[5] && part[5] != '') ? part[5] : 'none') + ' / ' + (part[1] != '' ? part[1] : 'none'),
-scaleSize((part[2] || 0) * 1024).replace(/<[^>]*>/g, '') + ' / ' + fstype.toUpperCase(),
-saved.path,
-saved.boot ? 1 : 0
-]);
+			dev_node,
+			((part[5] && part[5] != '') ? part[5] : 'none') + ' / ' + (part[1] != '' ? part[1] : 'none'),
+			scaleSize((part[2] || 0) * 1024).replace(/<[^>]*>/g, '') + ' / ' + fstype.toUpperCase(),
+			is_foreign ? active_mp : saved.path,
+			is_foreign ? 0 : (saved.boot ? 1 : 0),
+			active_mp,
+			is_foreign
+		]);
 	}
 	delete g.recolor;
 	g.recolor();
@@ -326,11 +423,15 @@ function save(nomsg) {
 	var r = [];
 	var seen = {};
 	for (var i = 0; i < nvmeGrids.length; ++i) {
-		var data = nvmeGrids[i].getAllData();
+		var g = nvmeGrids[i];
+		var data = g.getAllData();
 		for (var j = 0; j < data.length; ++j) {
+			if (data[j][6] == 1) continue;
 			var dev = ('' + data[j][0]).trim();
 			var sfx = data[j][3] || '';
-			if (sfx == '') {
+			var boot = (data[j][4] == 1) ? 1 : 0;
+			if (!boot || sfx == '') {
+				data[j][3] = '';
 				data[j][4] = 0;
 				continue;
 			}
@@ -341,7 +442,21 @@ function save(nomsg) {
 			}
 			seen[sfx] = 1;
 			var mp = (sfx == 'opt') ? '/opt' : '/mnt/' + sfx;
-			r.push(dev + '>' + mp + '>' + ((data[j][4] == 1) ? 1 : 0) + '>' + (nvmeUuid[dev] || '') + '<');
+			r.push(dev + '>' + mp + '>1>' + (nvmeUuid[dev] || '') + '<');
+		}
+
+		var rows = g.tb ? g.tb.rows : [];
+		for (var k = 0; k < rows.length; ++k) {
+			var row = rows[k];
+			if (row._data && row._data[6] == 1) continue;
+			if (row._data && (row._data[4] == 0 || !row._data[3])) {
+				row._data[3] = '';
+				row._data[4] = 0;
+				var view = g.dataToView(row._data);
+				for (var c = 0; c < row.cells.length; ++c) {
+					row.cells[c].innerHTML = view[c];
+				}
+			}
 		}
 	}
 	if (r.length > 16) {
@@ -410,9 +525,14 @@ function init() {
 <script>writeToggleSectionTitle('Notes', 'notes');</script>
 <div class="section" id="sesdiv_notes" style="display:none">
 <ul>
-<li><b>Mount Path</b> - Folder created under <i>/mnt</i>. Use letters, digits, <i>_ . -</i> and <i>/</i> only; each path must be unique. Entering <i>opt</i> as the mount path will mount the partition to <i>/opt</i> (or bind-mount it from <i>/mnt/opt</i> to <i>/opt</i> if the root filesystem is read-only).</li>
-<li><b>Auto Mount</b> - Mount the partition when the router starts or when settings are saved. Disabling Auto Mount (or saving without a Mount Path) will unmount the partition.</li>
+<li><b>Mount Path</b> - Folder created under <i>/mnt</i>. Use letters, digits, <i>_ . -</i> and <i>/</i> only; each path must be unique. Entering: &nbsp;<i><b>opt</b></i>&nbsp; :as the mount path will mount the partition to <i>/opt</i> ( or bind-mount it from <i>/mnt/opt</i> to <i>/opt</i> if the root filesystem is read-only ). Auto Mount must be enabled first to edit the Mount Path field.</li>
+<br>
+<li><b>Auto Mount</b> - Mount the partition when the router starts or when settings are saved. Enabling Auto Mount unlocks the Mount Path field. Disabling Auto Mount ( or saving an entry without a Mount Path ) will unmount the partition and clean up its mount directory under <i>/mnt</i>.</li>
+<br>
+<li><b>System / External Mounts</b> - If a partition is currently mounted by other means ( system, scripts etc ) rather than by this GUI, you will not be able to make any changes to it here. Disable any auto mounting for the drive, unmount it, then reload this page to access the options.</li>
+<br>
 <li><b>Add Partition</b> - Creates a new GPT partition in the free space of the drive and formats it with the selected filesystem.</li>
+<br>
 <li><b>Delete/Format</b> - Available when editing a row. <b>All data on the partition is permanently erased. Once you click ok in the popup warning, there is no going back. CANCEL BUTTONS OUTSIDE THE POPUP WILL NOT REVERT THE CHANGE.</b></li>
 </ul>
 </div>

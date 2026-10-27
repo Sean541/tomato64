@@ -339,7 +339,7 @@ static int nvme_unmount_dev_except(const char *dev, const char *keep1, const cha
 	endmntent(fp);
 
 	for (i = dcount - 1; i >= 0; --i) {
-		if ((umount(dirs[i]) != 0) && (umount2(dirs[i], MNT_FORCE) != 0)) {
+		if ((umount(dirs[i]) != 0) && (umount2(dirs[i], MNT_FORCE) != 0) && (umount2(dirs[i], MNT_DETACH) != 0)) {
 			logmsg(LOG_ERR, "nvme: %s is busy on %s, cannot unmount", dev, dirs[i]);
 			rc = -1;
 			break;
@@ -572,9 +572,6 @@ int nvme_main(int argc, char *argv[])
 			int found = 0;
 			int j;
 
-			if (!prev_mounts[i].mount_at_boot)
-				continue;
-
 			strlcpy(prev_dev, prev_mounts[i].device, sizeof(prev_dev));
 			if (prev_mounts[i].uuid[0] != '\0') {
 				char resolved[64];
@@ -589,6 +586,10 @@ int nvme_main(int argc, char *argv[])
 					if (!rc_nvme_mounts[j].mount_at_boot) {
 						logmsg(LOG_INFO, "nvme: auto mount disabled for %s, unmounting", prev_dev);
 						nvme_unmount_partition(prev_dev);
+						if (strncmp(prev_mounts[i].mount_path, "/mnt/", 5) == 0 && !is_path_mounted(prev_mounts[i].mount_path))
+							rmdir(prev_mounts[i].mount_path);
+						if (strcmp(prev_mounts[i].mount_path, "/opt") == 0 && !is_path_mounted("/mnt/opt"))
+							rmdir("/mnt/opt");
 					}
 					break;
 				}
@@ -597,6 +598,10 @@ int nvme_main(int argc, char *argv[])
 			if (!found) {
 				logmsg(LOG_INFO, "nvme: mount path cleared for %s, unmounting", prev_dev);
 				nvme_unmount_partition(prev_dev);
+				if (strncmp(prev_mounts[i].mount_path, "/mnt/", 5) == 0 && !is_path_mounted(prev_mounts[i].mount_path))
+					rmdir(prev_mounts[i].mount_path);
+				if (strcmp(prev_mounts[i].mount_path, "/opt") == 0 && !is_path_mounted("/mnt/opt"))
+					rmdir("/mnt/opt");
 			}
 		}
 	}

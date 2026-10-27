@@ -12,6 +12,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <mntent.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -30,6 +31,7 @@ typedef struct {
 	unsigned long long blocks;
 	char fstype[16];
 	char uuid[40];
+	char mountpoint[64];
 } httpd_nvme_partition_t;
 
 typedef struct {
@@ -345,6 +347,36 @@ static void load_blkid(void)
 	pclose(fp);
 }
 
+/* Query active mount points from /proc/mounts for discovered NVMe partitions */
+static void load_mountpoints(void)
+{
+	FILE *fp;
+	struct mntent *mnt;
+	int i, j;
+
+	if ((fp = setmntent("/proc/mounts", "r")) == NULL)
+		return;
+
+	while ((mnt = getmntent(fp)) != NULL) {
+		if (strncmp(mnt->mnt_fsname, "/dev/", 5) != 0)
+			continue;
+
+		for (i = 0; i < detected_drives_count; ++i) {
+			httpd_nvme_drive_t *drv = &detected_drives[i];
+			for (j = 0; j < drv->partition_count; ++j) {
+				httpd_nvme_partition_t *part = &drv->partitions[j];
+				if (strcmp(part->name, mnt->mnt_fsname + 5) == 0) {
+					/* Prefer /opt if partition is also mounted under /mnt/opt */
+					if ((part->mountpoint[0] == '\0') || (strcmp(mnt->mnt_dir, "/opt") == 0))
+						strlcpy(part->mountpoint, mnt->mnt_dir, sizeof(part->mountpoint));
+					break;
+				}
+			}
+		}
+	}
+	endmntent(fp);
+}
+
 /* shorter names first, then alphabetical: nvme0n1p2 < nvme0n1p10 */
 static int name_cmp(const char *a, const char *b)
 {
@@ -436,6 +468,7 @@ static void discover_nvme_hardware(void)
 	}
 
 	load_blkid();
+	load_mountpoints();
 }
 
 static void web_js_string(const char *s)
@@ -446,7 +479,7 @@ static void web_js_string(const char *s)
 	free(e);
 }
 
-/* nvme_disks = { 'nvme0n1': { blocks: N, partitions: [ [name, label, blocks, fstype, uuid, partlabel], ... ] }, ... }; */
+/* nvme_disks = { 'nvme0n1': { blocks: N, partitions: [ [name, label, blocks, fstype, uuid, partlabel, mountpoint], ... ] }, ... }; */
 void asp_nvme_disks(int argc, char **argv)
 {
 	int i, j;
@@ -480,6 +513,8 @@ void asp_nvme_disks(int argc, char **argv)
 			web_js_string(part->uuid);
 			web_puts(", ");
 			web_js_string(part->partlabel);
+			web_puts(", ");
+			web_js_string(part->mountpoint);
 			web_puts("]");
 		}
 		web_puts("] }");
