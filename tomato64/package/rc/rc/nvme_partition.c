@@ -146,16 +146,17 @@ static int nvme_disk_is_unsafe(const char *disk_path, const unsigned char *used)
 	return unsafe;
 }
 
-/* Create a GPT partition of size_mb MiB in the free space and format it as ext4.
+/* Create a GPT partition of size_mb MiB in the free space and format it with the requested filesystem.
  * Uses sgdisk (gptfdisk) and BusyBox partprobe, both part of Tomato64; parted is not available.
- * disk_arg: /dev/nvme<N>n<M>, size_str: size in MiB, label: optional volume label (may be empty).
+ * disk_arg: /dev/nvme<N>n<M>, size_str: size in MiB, fs: filesystem type, label: optional volume label (may be empty).
  * All parameters come from nvmecmd.cgi and are validated again here. */
-int nvme_execute_partition(const char *disk_arg, const char *size_str, const char *label)
+int nvme_execute_partition(const char *disk_arg, const char *size_str, const char *fs, const char *label)
 {
-	char range_s[80], cname_s[32], new_part[64], err_msg[160];
+	char range_s[80], cname_s[32], type_s[16], new_part[64], err_msg[160];
 	unsigned char before[NVME_MAX_PARTS], after[NVME_MAX_PARTS];
 	unsigned long long allocated_sectors, req_sectors, max_contig_sectors = 0, disk_sectors;
 	const char *disk;
+	const char *tool = NULL;
 	long size_mb;
 	char *endp;
 	int ret, i, retries, part_count = 0;
@@ -168,6 +169,31 @@ int nvme_execute_partition(const char *disk_arg, const char *size_str, const cha
 	if (!nvme_valid_label(label)) {
 		logmsg(LOG_ERR, "nvme: invalid volume label");
 		nvme_set_error("Invalid volume label.");
+		return 1;
+	}
+
+	if (!fs || (*fs == '\0'))
+		fs = "ext4";
+
+	if (strcmp(fs, "ext4") == 0)
+		tool = "mkfs.ext4";
+	else if (strcmp(fs, "ext3") == 0)
+		tool = "mkfs.ext3";
+	else if (strcmp(fs, "btrfs") == 0)
+		tool = "mkfs.btrfs";
+	else if (strcmp(fs, "vfat") == 0)
+		tool = "mkfs.vfat";
+	else if (strcmp(fs, "ntfs") == 0)
+		tool = "mkfs.ntfs";
+	else {
+		logmsg(LOG_ERR, "nvme: unsupported filesystem type requested: %s", fs);
+		nvme_set_error("Unsupported filesystem type.");
+		return 1;
+	}
+
+	if ((strcmp(fs, "vfat") == 0) && (strlen(label) > 11)) {
+		logmsg(LOG_ERR, "nvme: a FAT volume label is limited to 11 characters");
+		nvme_set_error("A FAT volume label is limited to 11 characters.");
 		return 1;
 	}
 
@@ -191,9 +217,10 @@ int nvme_execute_partition(const char *disk_arg, const char *size_str, const cha
 		nvme_set_error("sgdisk is not installed.");
 		return 1;
 	}
-	if (!nvme_have_tool("mkfs.ext4")) {
-		logmsg(LOG_ERR, "nvme: mkfs.ext4 is not installed.");
-		nvme_set_error("mkfs.ext4 is not installed.");
+	if (!nvme_have_tool(tool)) {
+		logmsg(LOG_ERR, "nvme: %s is not installed.", tool);
+		snprintf(err_msg, sizeof(err_msg), "%s is not installed.", tool);
+		nvme_set_error(err_msg);
 		return 1;
 	}
 
@@ -244,6 +271,9 @@ int nvme_execute_partition(const char *disk_arg, const char *size_str, const cha
 	else
 		snprintf(range_s, sizeof(range_s), "0:0:+%ldM", size_mb);
 
+	snprintf(type_s, sizeof(type_s), "0:%s",
+	         ((strcmp(fs, "vfat") == 0) || (strcmp(fs, "ntfs") == 0)) ? "0700" : "8300");
+
 	if (label[0] != '\0')
 		snprintf(cname_s, sizeof(cname_s), "0:%s", label);
 
@@ -251,15 +281,15 @@ int nvme_execute_partition(const char *disk_arg, const char *size_str, const cha
 	 * a fresh GPT layout (-o) so it does not fail with exit code 3 on blank/non-GPT disks. */
 	if (part_count == 0) {
 		if (label[0] != '\0')
-			ret = eval("sgdisk", "-o", "-n", range_s, "-t", "0:8300", "-c", cname_s, (char *)disk_arg);
+			ret = eval("sgdisk", "-o", "-n", range_s, "-t", type_s, "-c", cname_s, (char *)disk_arg);
 		else
-			ret = eval("sgdisk", "-o", "-n", range_s, "-t", "0:8300", (char *)disk_arg);
+			ret = eval("sgdisk", "-o", "-n", range_s, "-t", type_s, (char *)disk_arg);
 	}
 	else {
 		if (label[0] != '\0')
-			ret = eval("sgdisk", "-n", range_s, "-t", "0:8300", "-c", cname_s, (char *)disk_arg);
+			ret = eval("sgdisk", "-n", range_s, "-t", type_s, "-c", cname_s, (char *)disk_arg);
 		else
-			ret = eval("sgdisk", "-n", range_s, "-t", "0:8300", (char *)disk_arg);
+			ret = eval("sgdisk", "-n", range_s, "-t", type_s, (char *)disk_arg);
 	}
 
 	if (ret != 0) {
@@ -295,8 +325,8 @@ int nvme_execute_partition(const char *disk_arg, const char *size_str, const cha
 		return 1;
 	}
 
-	logmsg(LOG_NOTICE, "nvme: formatting new partition %s as ext4...", new_part);
-	return nvme_execute_format(new_part, "ext4", label);
+	logmsg(LOG_NOTICE, "nvme: formatting new partition %s as %s...", new_part, fs);
+	return nvme_execute_format(new_part, fs, label);
 }
 
 int nvme_execute_delete(const char *dev)

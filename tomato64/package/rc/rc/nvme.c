@@ -24,6 +24,7 @@
 #define MAX_BLKID_CACHE		64
 #define NVME_BUSY_FILE		"/tmp/nvme_busy"
 #define NVME_ERR_FILE		"/tmp/nvme_err"
+#define NVME_PREV_MOUNTS_FILE	"/tmp/nvme_prev_mounts"
 #define NVME_DEVICE_WAIT_SECS	5 /* total time to wait for missing device nodes at boot */
 
 typedef struct {
@@ -425,21 +426,20 @@ void nvme_set_error(const char *msg)
 }
 
 /* record format: <device>><mount path>><mount at boot>[><uuid>]< (repeated); invalid records are skipped */
-static void parse_rc_nvme_mounts(const char *data)
+static int parse_nvme_mounts_string(const char *data, rc_nvme_mount_t *out_mounts, int max_mounts)
 {
 	char *buf, *ptr, *rec, *dev, *path, *boot, *uuid;
-	int i, dup;
+	int count = 0, i, dup;
 
-	rc_nvme_mounts_count = 0;
-	if (!data || (*data == '\0'))
-		return;
+	if (!data || (*data == '\0') || !out_mounts || (max_mounts <= 0))
+		return 0;
 
 	/* never modify the nvram string in place */
 	if ((buf = strdup(data)) == NULL)
-		return;
+		return 0;
 
 	ptr = buf;
-	while ((rc_nvme_mounts_count < NVME_MAX_MOUNTS) && ((rec = strsep(&ptr, "<")) != NULL)) {
+	while ((count < max_mounts) && ((rec = strsep(&ptr, "<")) != NULL)) {
 		if (*rec == '\0')
 			continue;
 
@@ -455,8 +455,8 @@ static void parse_rc_nvme_mounts(const char *data)
 			continue;
 		}
 
-		for (dup = 0, i = 0; i < rc_nvme_mounts_count; ++i) {
-			if ((strcmp(rc_nvme_mounts[i].device, dev) == 0) || (strcmp(rc_nvme_mounts[i].mount_path, path) == 0)) {
+		for (dup = 0, i = 0; i < count; ++i) {
+			if ((strcmp(out_mounts[i].device, dev) == 0) || (strcmp(out_mounts[i].mount_path, path) == 0)) {
 				dup = 1;
 				break;
 			}
@@ -466,14 +466,20 @@ static void parse_rc_nvme_mounts(const char *data)
 			continue;
 		}
 
-		strlcpy(rc_nvme_mounts[rc_nvme_mounts_count].device, dev, sizeof(rc_nvme_mounts[0].device));
-		strlcpy(rc_nvme_mounts[rc_nvme_mounts_count].mount_path, path, sizeof(rc_nvme_mounts[0].mount_path));
-		strlcpy(rc_nvme_mounts[rc_nvme_mounts_count].uuid, uuid, sizeof(rc_nvme_mounts[0].uuid));
-		rc_nvme_mounts[rc_nvme_mounts_count].mount_at_boot = (*boot == '1');
-		rc_nvme_mounts_count++;
+		strlcpy(out_mounts[count].device, dev, sizeof(out_mounts[0].device));
+		strlcpy(out_mounts[count].mount_path, path, sizeof(out_mounts[0].mount_path));
+		strlcpy(out_mounts[count].uuid, uuid, sizeof(out_mounts[0].uuid));
+		out_mounts[count].mount_at_boot = (*boot == '1');
+		count++;
 	}
 
 	free(buf);
+	return count;
+}
+
+static void parse_rc_nvme_mounts(const char *data)
+{
+	rc_nvme_mounts_count = parse_nvme_mounts_string(data, rc_nvme_mounts, NVME_MAX_MOUNTS);
 }
 
 static void nvme_set_busy(int on)
@@ -505,9 +511,11 @@ int nvme_main(int argc, char *argv[])
 		return rc;
 	}
 	if ((argc >= 4) && (strcmp(argv[1], "partition") == 0)) {
+		const char *fs = (argc >= 5) ? argv[4] : "ext4";
+		const char *label = (argc >= 6) ? argv[5] : "";
 		unlink(NVME_ERR_FILE);
 		nvme_set_busy(1);
-		rc = nvme_execute_partition(argv[2], argv[3], (argc >= 5) ? argv[4] : "");
+		rc = nvme_execute_partition(argv[2], argv[3], fs, label);
 		if ((rc != 0) && !f_exists(NVME_ERR_FILE))
 			nvme_set_error("Failed to create partition.");
 		nvme_set_busy(0);
@@ -531,6 +539,7 @@ int nvme_main(int argc, char *argv[])
 		FILE *fp;
 		struct mntent *mnt;
 
+		unlink(NVME_PREV_MOUNTS_FILE);
 		sync();
 		if ((fp = setmntent("/proc/mounts", "r")) != NULL) {
 			char dirs[NVME_MAX_MOUNTS * 2][128];
@@ -550,6 +559,48 @@ int nvme_main(int argc, char *argv[])
 		return 0;
 	}
 
+	{
+		rc_nvme_mount_t prev_mounts[NVME_MAX_MOUNTS];
+		int prev_count = 0;
+		char prev_data[2048];
+
+		if (f_read_string(NVME_PREV_MOUNTS_FILE, prev_data, sizeof(prev_data)) > 0)
+			prev_count = parse_nvme_mounts_string(prev_data, prev_mounts, NVME_MAX_MOUNTS);
+
+		for (i = 0; i < prev_count; i++) {
+			char prev_dev[64];
+			int found = 0;
+			int j;
+
+			if (!prev_mounts[i].mount_at_boot)
+				continue;
+
+			strlcpy(prev_dev, prev_mounts[i].device, sizeof(prev_dev));
+			if (prev_mounts[i].uuid[0] != '\0') {
+				char resolved[64];
+				if (nvme_find_by_uuid(prev_mounts[i].uuid, resolved, sizeof(resolved)))
+					strlcpy(prev_dev, resolved, sizeof(prev_dev));
+			}
+
+			for (j = 0; j < rc_nvme_mounts_count; j++) {
+				if (nvme_record_matches(rc_nvme_mounts[j].device, rc_nvme_mounts[j].uuid,
+				                        prev_dev, prev_mounts[i].uuid)) {
+					found = 1;
+					if (!rc_nvme_mounts[j].mount_at_boot) {
+						logmsg(LOG_INFO, "nvme: auto mount disabled for %s, unmounting", prev_dev);
+						nvme_unmount_partition(prev_dev);
+					}
+					break;
+				}
+			}
+
+			if (!found) {
+				logmsg(LOG_INFO, "nvme: mount path cleared for %s, unmounting", prev_dev);
+				nvme_unmount_partition(prev_dev);
+			}
+		}
+	}
+
 	/* First pass: resolve device nodes by UUID and unmount any old/changed mountpoints across all
 	 * configured entries before mounting, so swapping or reassigning paths between partitions works. */
 	for (i = 0; i < rc_nvme_mounts_count; i++) {
@@ -559,6 +610,8 @@ int nvme_main(int argc, char *argv[])
 		int is_opt, ro_root, has_uuid, found_uuid = 0;
 
 		entry_valid[i] = 0;
+		if (!rc_nvme_mounts[i].mount_at_boot)
+			continue;
 		strlcpy(partition, rc_nvme_mounts[i].device, sizeof(partition));
 		is_opt = (strcmp(mount_path, "/opt") == 0);
 		ro_root = is_opt ? root_is_readonly() : 0;
@@ -684,6 +737,8 @@ int nvme_main(int argc, char *argv[])
 				logmsg(LOG_INFO, "nvme: bind mounted /mnt/opt on /opt for %s", partition);
 		}
 	}
+
+	f_write_string(NVME_PREV_MOUNTS_FILE, nvram_safe_get("nvme_mounts"), 0, 0600);
 
 	return 0;
 }

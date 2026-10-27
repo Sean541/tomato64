@@ -529,10 +529,10 @@ static int nvme_is_busy(void)
 }
 
 /* nvmecmd.cgi
- *   cmd=status                                        -> report whether a format/partition job is running
- *   cmd=format&dev=/dev/nvme0n1p1&fs=ext4&label=X     -> format a partition (runs in the background)
- *   cmd=partition&dev=/dev/nvme0n1&size=1024&label=X  -> create + format a partition (background)
- *   cmd=delete&dev=/dev/nvme0n1p1                     -> delete a partition (background)
+ *   cmd=status                                               -> report whether a format/partition job is running
+ *   cmd=format&dev=/dev/nvme0n1p1&fs=ext4&label=X            -> format a partition (runs in the background)
+ *   cmd=partition&dev=/dev/nvme0n1&size=1024&fs=ext4&label=X -> create + format a partition (background)
+ *   cmd=delete&dev=/dev/nvme0n1p1                            -> delete a partition (background)
  * Replies with: nvme = { busy: 0|1, ok: 0|1, err: '...' }; */
 void wo_nvmecommand(char *url)
 {
@@ -543,7 +543,7 @@ void wo_nvmecommand(char *url)
 	const char *size = webcgi_safeget("size", "");
 	const char *err = NULL;
 	char err_buf[256] = {0};
-	char *argv[6];
+	char *argv[7];
 	char *e;
 	long mb;
 	int pid, busy, lock_fd;
@@ -562,17 +562,14 @@ void wo_nvmecommand(char *url)
 			err = "Invalid device.";
 		else if (!is_del && !nvme_valid_label(label))
 			err = "Invalid volume label (maximum 16 characters of A-Z a-z 0-9 _ . -).";
-		else if (is_fmt) {
-			if (!nvme_fs_available(fs))
-				err = "Unsupported filesystem, or its mkfs tool is not installed.";
-			else if ((strcmp(fs, "vfat") == 0) && (strlen(label) > 11))
-				err = "A FAT volume label is limited to 11 characters.";
-		}
-		else if (init_nvme_tools(), !nvme_has_sgdisk)
-			err = "sgdisk is not installed.";
-		else if (!is_del) { /* Check sizes and mkfs.ext4 for partition creation only */
-			if (!nvme_fs_available("ext4"))
-				err = "mkfs.ext4 is not installed.";
+		else if (!is_del && !nvme_fs_available(fs))
+			err = "Unsupported filesystem, or its mkfs tool is not installed.";
+		else if (!is_del && (strcmp(fs, "vfat") == 0) && (strlen(label) > 11))
+			err = "A FAT volume label is limited to 11 characters.";
+		else if (!is_fmt && !is_del) {
+			init_nvme_tools();
+			if (!nvme_has_sgdisk)
+				err = "sgdisk is not installed.";
 			else {
 				mb = strtol(size, &e, 10);
 				if ((*size == '\0') || (*e != '\0') || (mb <= 0) || (mb > 100000000L))
@@ -594,10 +591,16 @@ void wo_nvmecommand(char *url)
 				argv[2] = (char *)dev;
 				if (is_del)
 					argv[3] = NULL;
-				else {
-					argv[3] = (char *)(is_fmt ? fs : size);
+				else if (is_fmt) {
+					argv[3] = (char *)fs;
 					argv[4] = (char *)label;
 					argv[5] = NULL;
+				}
+				else {
+					argv[3] = (char *)size;
+					argv[4] = (char *)fs;
+					argv[5] = (char *)label;
+					argv[6] = NULL;
 				}
 
 				if (_eval(argv, NULL, 0, &pid) != 0) {

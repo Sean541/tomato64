@@ -700,7 +700,7 @@ extern int nvme_unmount_partition(const char *dev);
 extern void nvme_get_partition_uuid(const char *dev_node, char *out_uuid, size_t uuid_len);
 extern int nvme_record_matches(const char *rec_dev, const char *rec_uuid, const char *dev, const char *uuid);
 extern int nvme_execute_format(const char *dev, const char *fs, const char *label);
-extern int nvme_execute_partition(const char *disk, const char *size_mb, const char *label);
+extern int nvme_execute_partition(const char *disk, const char *size_mb, const char *fs, const char *label);
 extern int nvme_execute_delete(const char *dev);
 
 /* wireguard.c */

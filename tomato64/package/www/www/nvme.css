@@ -1,7 +1,3 @@
-/* --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- */
-/* NVMe Storage Module Stylesheet (Tomato64 Theme-Adaptive)        */
-/* --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- */
-
 /* --- Dynamic Theme Modal Overlays --- */
 #format-modal-overlay, #partition-modal-overlay, #delete-modal-overlay {
 	display: none;
@@ -39,7 +35,7 @@
 	width: 130px;
 	font-weight: bold;
 }
-#format-modal-box select, #format-modal-box input[type="text"], #partition-modal-box input[type="text"] {
+#format-modal-box select, #partition-modal-box select, #format-modal-box input[type="text"], #partition-modal-box input[type="text"] {
 	flex: 1;
 	padding: 3px;
 }

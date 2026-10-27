@@ -174,6 +174,7 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 		if (pfx) pfx.textContent = (s == 'opt') ? '/' : '/mnt/';
 		if (s == '') {
 			ferror.clear(f[0]);
+			if (f[1] && f[1].checked) f[1].checked = false;
 			return 1;
 		}
 		if (s.length > 20 || !mountPathRe.test(s)) {
@@ -228,7 +229,9 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 	g.fieldValuesToData = function(row) {
 		var f = fields.getAll(row);
 		var o = this.source ? this.source.getRowData() : [];
-		return [o[0] || '', o[1] || '', o[2] || '', f[0] ? f[0].value.trim() : '', (f[1] && f[1].checked) ? 1 : 0];
+		var p = f[0] ? f[0].value.trim() : '';
+		var b = (f[1] && f[1].checked && p != '') ? 1 : 0;
+		return [o[0] || '', o[1] || '', o[2] || '', p, b];
 	};
 	g.dataToView = function(data) {
 		var p = data[3] || '';
@@ -280,12 +283,12 @@ function nvmeAddDisk(root, disk_name, info) {
 	var tMB = Math.floor(total / 1024),
 		aMB = Math.floor(allocated / 1024),
 		fMB = Math.floor(free / 1024);
-	if (nvme_can_partition && nvme_fs && nvme_fs.indexOf('ext4') != -1 && partitions.length < 16) btn.onclick = function() {
+	if (nvme_can_partition && nvme_fs && nvme_fs.length && partitions.length < 16) btn.onclick = function() {
 		triggerPartition(disk_name, tMB, aMB, fMB);
 	};
 	else {
 		btn.disabled = true;
-		btn.title = !nvme_can_partition ? 'sgdisk is not installed' : (partitions.length >= 16 ? 'Maximum of 16 partitions reached' : 'mkfs.ext4 is not installed');
+		btn.title = !nvme_can_partition ? 'sgdisk is not installed' : (partitions.length >= 16 ? 'Maximum of 16 partitions reached' : 'No mkfs tools installed');
 	}
 	title.appendChild(btn);
 	var sub = document.createElement('div');
@@ -327,7 +330,11 @@ function save(nomsg) {
 		for (var j = 0; j < data.length; ++j) {
 			var dev = ('' + data[j][0]).trim();
 			var sfx = data[j][3] || '';
-			if (dev == '' || sfx == '') continue;
+			if (sfx == '') {
+				data[j][4] = 0;
+				continue;
+			}
+			if (dev == '') continue;
 			if (seen[sfx]) {
 				alert('Duplicate mount path: ' + ((sfx == 'opt') ? '/opt' : '/mnt/' + sfx));
 				return;
@@ -361,11 +368,15 @@ function earlyInit() {
 		ntfs: 'NTFS'
 	};
 	var sel = E('modal-fs-select');
+	var partSel = E('modal-part-fs-select');
 	var fs_list = nvme_fs || [];
 	if (fs_list.length > 0) {
-		var optFrag = document.createDocumentFragment();
-		for (var i = 0; i < fs_list.length; ++i) optFrag.appendChild(new Option(names[fs_list[i]] || fs_list[i], fs_list[i]));
-		sel.appendChild(optFrag);
+		for (var i = 0; i < fs_list.length; ++i) {
+			var optVal = fs_list[i];
+			var optText = names[optVal] || optVal;
+			if (sel) sel.appendChild(new Option(optText, optVal));
+			if (partSel) partSel.appendChild(new Option(optText, optVal));
+		}
 	}
 	for (var disk_name in nvme_disks) {
 		if (!nvme_disks.hasOwnProperty(disk_name)) continue;
@@ -400,8 +411,8 @@ function init() {
 <div class="section" id="sesdiv_notes" style="display:none">
 <ul>
 <li><b>Mount Path</b> - Folder created under <i>/mnt</i>. Use letters, digits, <i>_ . -</i> and <i>/</i> only; each path must be unique. Entering <i>opt</i> as the mount path will mount the partition to <i>/opt</i> (or bind-mount it from <i>/mnt/opt</i> to <i>/opt</i> if the root filesystem is read-only).</li>
-<li><b>Auto Mount</b> - Mount the partition when the router starts or when settings are saved. Disabling Auto Mount does not unmount a partition that is already mounted.</li>
-<li><b>Add Partition</b> - Creates a new GPT partition in the free space of the drive and formats it as EXT4.</li>
+<li><b>Auto Mount</b> - Mount the partition when the router starts or when settings are saved. Disabling Auto Mount (or saving without a Mount Path) will unmount the partition.</li>
+<li><b>Add Partition</b> - Creates a new GPT partition in the free space of the drive and formats it with the selected filesystem.</li>
 <li><b>Delete/Format</b> - Available when editing a row. <b>All data on the partition is permanently erased. Once you click ok in the popup warning, there is no going back. CANCEL BUTTONS OUTSIDE THE POPUP WILL NOT REVERT THE CHANGE.</b></li>
 </ul>
 </div>
@@ -449,6 +460,10 @@ function init() {
 <div class="field-row">
 <label for="modal-part-size-input">Size (MB):</label>
 <input type="text" id="modal-part-size-input" maxlength="10" placeholder="e.g. 10240 for 10GB">
+</div>
+<div class="field-row">
+<label for="modal-part-fs-select">Filesystem:</label>
+<select id="modal-part-fs-select"></select>
 </div>
 <div class="field-row">
 <label for="modal-part-label-input">Volume Label:</label>

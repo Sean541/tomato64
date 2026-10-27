@@ -57,7 +57,6 @@ function confirmFormat() {
 	}
 }
 
-/* --- Shared helper: start a format/partition job through nvmecmd.cgi and wait for it to finish --- */
 var nvmeXob = null;
 
 function nvmeMsg(text) {

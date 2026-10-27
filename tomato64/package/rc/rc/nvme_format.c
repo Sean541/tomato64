@@ -140,6 +140,18 @@ int nvme_execute_format(const char *dev, const char *fs, const char *label)
 
 	if (ret == 0) {
 		logmsg(LOG_NOTICE, "nvme: successfully formatted %s as %s.", dev, fs);
+		if (nvme_have_tool("sgdisk")) {
+			char disk[64], type_spec[32], *p_ptr;
+			strlcpy(disk, dev, sizeof(disk));
+			p_ptr = strrchr(disk, 'p');
+			if (p_ptr) {
+				int pnum = atoi(p_ptr + 1);
+				*p_ptr = '\0';
+				const char *tcode = ((strcmp(fs, "vfat") == 0) || (strcmp(fs, "ntfs") == 0)) ? "0700" : "8300";
+				snprintf(type_spec, sizeof(type_spec), "%d:%s", pnum, tcode);
+				eval("sgdisk", "-t", type_spec, disk, NULL);
+			}
+		}
 		nvme_get_partition_uuid(dev, new_uuid, sizeof(new_uuid));
 		nvme_update_mount_uuid(dev, old_uuid, new_uuid);
 	}

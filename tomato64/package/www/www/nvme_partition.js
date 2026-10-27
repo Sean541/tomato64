@@ -13,6 +13,12 @@ function triggerPartition(diskName, totalMB, allocatedMB, freeMB) {
 		' / Allocated: ' + scaleSize(allocatedMB * 1024 * 1024) +
 		' / Free: ' + scaleSize(freeMB * 1024 * 1024);
 	E('modal-part-size-input').value = '';
+	var sel = E('modal-part-fs-select');
+	if (sel) {
+		sel.value = 'ext4';
+		if (sel.selectedIndex < 0 && sel.options.length > 0)
+			sel.selectedIndex = 0;
+	}
 	E('modal-part-label-input').value = '';
 
 	nvmeApplyModalTheme(E('partition-modal-box'));
@@ -30,10 +36,17 @@ function closePartitionModal() {
 function confirmPartition() {
 	var sizeInputStr = E('modal-part-size-input').value.trim();
 	var requestedMB = parseInt(sizeInputStr, 10);
+	var sel = E('modal-part-fs-select');
+	var fs_choice = sel ? sel.value : 'ext4';
 	var partitionLabel = E('modal-part-label-input').value.trim();
 
 	if (partitionLabel !== '' && !/^[A-Za-z0-9_.\-]{1,16}$/.test(partitionLabel)) {
 		alert('Invalid volume label. Use up to 16 characters of A-Z a-z 0-9 _ . -');
+		return;
+	}
+
+	if (fs_choice === 'vfat' && partitionLabel.length > 11) {
+		alert('A FAT volume label is limited to 11 characters.');
 		return;
 	}
 
@@ -54,6 +67,7 @@ function confirmPartition() {
 	var warningMsg = 'WARNING: You are about to partition /dev/' + currentPartitionDisk + '.\n\n' +
 		'Please ensure you know what you are doing as permanent data loss can occur.\n\n' +
 		'Requested Partition Size: ' + requestedMB + ' MB\n' +
+		'Filesystem: ' + fs_choice.toUpperCase() + '\n' +
 		'Partition Label: ' + (partitionLabel !== '' ? partitionLabel : '(None)') + '\n' +
 		'Projected Drive Space After Partitioning:\n' +
 		' - Total Capacity: ' + scaleSize(currentPartitionTotalMB * 1024 * 1024).replace(/<[^>]*>/g, '') + '\n' +
@@ -65,7 +79,7 @@ function confirmPartition() {
 		var disk = currentPartitionDisk;
 		if (typeof nvmeSaveDraft === 'function') nvmeSaveDraft();
 		closePartitionModal();
-		nvmeRun('Partitioning /dev/' + disk + '...', 'cmd=partition&dev=' + escapeCGI('/dev/' + disk) + '&size=' + requestedMB + '&label=' + escapeCGI(partitionLabel));
+		nvmeRun('Partitioning /dev/' + disk + '...', 'cmd=partition&dev=' + escapeCGI('/dev/' + disk) + '&size=' + requestedMB + '&fs=' + escapeCGI(fs_choice) + '&label=' + escapeCGI(partitionLabel));
 	}
 }
 
