@@ -353,6 +353,8 @@ static void start_dnscrypt_instance(const char *dnscrypt_local, const char *dnsc
 	argc = 0;
 	argv[argc++] = "dnscrypt-proxy";
 	argv[argc++] = "-d";
+	argv[argc++] = "-u";
+	argv[argc++] = "nobody";
 
 	if (nvram_get_int("dnscrypt_ephemeral_keys"))
 		argv[argc++] = "-E";
@@ -401,6 +403,9 @@ void start_dnscrypt(void)
 		return;
 
 	resolv = f_exists(dnscrypt_resolv_alt) ? dnscrypt_resolv_alt : dnscrypt_resolv;
+
+	mkdir_if_none("/var/empty");
+	chmod("/var/empty", 0755);
 
 	snprintf(dnscrypt_local, sizeof(dnscrypt_local), "127.0.0.1:%s", nvram_safe_get("dnscrypt_port"));
 	start_dnscrypt_instance(dnscrypt_local, resolv);

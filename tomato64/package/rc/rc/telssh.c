@@ -69,14 +69,14 @@ void create_passwd(void)
 #ifdef TCONFIG_SAMBASRV
 	snprintf(s, sizeof(s), "root:x:0:0:root:/root:/bin/sh\n"
 	           "%s:x:100:100:nas:/dev/null:/dev/null\n"
-	           "nobody:x:65534:65534:nobody:/dev/null:/dev/null\n",
+	           "nobody:x:65534:65534:nobody:/var/empty:/dev/null\n",
 	           smbd_user);
 
 	f_write_string("/etc/passwd", s, 0, 0644);
 #else
 	f_write_string("/etc/passwd",
 	               "root:x:0:0:root:/root:/bin/sh\n"
-	               "nobody:x:65534:65534:nobody:/dev/null:/dev/null\n",
+	               "nobody:x:65534:65534:nobody:/var/empty:/dev/null\n",
 	               0, 0644);
 #endif
 	fappend_file("/etc/passwd", "/etc/passwd.custom");
