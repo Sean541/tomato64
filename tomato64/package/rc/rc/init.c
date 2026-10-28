@@ -486,12 +486,22 @@ static void shutdn(int rb)
 
 	_dprintf("TERM\n");
 	kill(-1, SIGTERM);
-	sleep(3);
+	for (i = 0; i < 15; ++i) {
+		chld_reap(0);
+		if ((waitpid(-1, NULL, WNOHANG) == -1) && (errno == ECHILD))
+			break;
+		usleep(100000);
+	}
 	sync();
 
 	_dprintf("KILL\n");
 	kill(-1, SIGKILL);
-	sleep(1);
+	for (i = 0; i < 10; ++i) {
+		chld_reap(0);
+		if ((waitpid(-1, NULL, WNOHANG) == -1) && (errno == ECHILD))
+			break;
+		usleep(100000);
+	}
 	sync();
 
 #ifndef TOMATO64
@@ -516,7 +526,20 @@ static void shutdn(int rb)
 #endif /* TOMATO64 */
 
 #ifdef TOMATO64
+	/* Flush page cache and trigger kernel emergency read-only remount via SysRq before /proc is unmounted */
+	f_write("/proc/sys/kernel/sysrq", "1", 1, 0, 0);
+	f_write("/proc/sysrq-trigger", "s", 1, 0, 0); /* sync */
+	f_write("/proc/sysrq-trigger", "u", 1, 0, 0); /* emergency remount-ro (SB_FORCE) */
+	usleep(150000); /* allow kernel do_emergency_remount workqueue to finish */
+
 	system("/bin/umount -a -d -r");
+
+	/* Final direct kernel barrier: ensure rootfs is remounted read-only without subshells */
+	if (mount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0) {
+		sync();
+		mount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL);
+	}
+	sync();
 #ifdef TOMATO64_HAS_POWEROFF
 	reboot(rb ? RB_AUTOBOOT : RB_POWER_OFF);
 #else
@@ -11440,7 +11463,21 @@ int fastreboot_main(int argc, char *argv[])
 		unlink("/var/log/messages.0");
 		sync();
 
+		/* Flush page cache and trigger kernel emergency read-only remount via SysRq before /proc is unmounted */
+		f_write("/proc/sys/kernel/sysrq", "1", 1, 0, 0);
+		f_write("/proc/sysrq-trigger", "s", 1, 0, 0); /* sync */
+		f_write("/proc/sysrq-trigger", "u", 1, 0, 0); /* emergency remount-ro (SB_FORCE) */
+		usleep(150000);
+
 		system("/bin/umount -a -d -r");
+
+		/* Final direct kernel barrier: ensure rootfs is remounted read-only without subshells */
+		if (mount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0) {
+			sync();
+			mount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL);
+		}
+		sync();
+
 		system("kexec -l /boot/bzImage --reuse-cmdline");
 		system("kexec -e");
 	}
