@@ -105,13 +105,20 @@ static int nvme_valid_uuid(const char *s)
 
 static int nvme_valid_mount_path(const char *s)
 {
-	const char *p;
+	const char *p, *sfx;
 
 	if (!s)
 		return 0;
 	if (strcmp(s, "/opt") == 0)
 		return 1;
-	if ((strncmp(s, "/mnt/", 5) != 0) || (s[5] == '\0') || (strcmp(s, "/mnt/opt") == 0) || (strncmp(s, "/mnt/opt/", 9) == 0))
+	if (strncmp(s, "/tmp/mnt/", 9) == 0)
+		sfx = s + 9;
+	else if (strncmp(s, "/mnt/", 5) == 0)
+		sfx = s + 5;
+	else
+		return 0;
+
+	if ((*sfx == '\0') || (strcmp(sfx, "opt") == 0) || (strncmp(sfx, "opt/", 4) == 0))
 		return 0;
 	if (strlen(s) >= NVME_MOUNT_PATH_MAX)
 		return 0;
@@ -124,6 +131,20 @@ static int nvme_valid_mount_path(const char *s)
 	if ((strstr(s, "..") != NULL) || (strstr(s, "//") != NULL) || (p[-1] == '/'))
 		return 0;
 	return 1;
+}
+
+/* Compare two mount directory paths, treating /mnt/<x> and /tmp/mnt/<x> as identical */
+static int mount_path_matches(const char *p1, const char *p2)
+{
+	if (!p1 || !p2)
+		return 0;
+	if (strcmp(p1, p2) == 0)
+		return 1;
+	if (strncmp(p1, "/tmp/mnt/", 9) == 0 && strncmp(p2, "/mnt/", 5) == 0)
+		return (strcmp(p1 + 4, p2) == 0);
+	if (strncmp(p1, "/mnt/", 5) == 0 && strncmp(p2, "/tmp/mnt/", 9) == 0)
+		return (strcmp(p1, p2 + 4) == 0);
+	return 0;
 }
 
 /* Validate an nvme_mounts string (<device>><mount path>><0|1>[><uuid>]< repeated) before it is stored in nvram.
@@ -161,7 +182,7 @@ int nvme_mounts_valid(const char *data)
 		}
 
 		for (i = 0; i < count; ++i) {
-			if ((strcmp(devs[i], dev) == 0) || (strcmp(paths[i], path) == 0)) {
+			if ((strcmp(devs[i], dev) == 0) || mount_path_matches(paths[i], path)) {
 				ok = 0; /* duplicate device or mount path */
 				break;
 			}

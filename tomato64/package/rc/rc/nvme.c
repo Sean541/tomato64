@@ -234,16 +234,54 @@ static int nvme_valid_uuid(const char *s)
 	return (n <= 36);
 }
 
-/* "/opt" or "/mnt/<suffix>": no '..', no trailing '/', limited character set */
+/* Compare two mount directory paths, treating /mnt/<x> and /tmp/mnt/<x> as identical */
+static int mount_path_matches(const char *p1, const char *p2)
+{
+	if (!p1 || !p2)
+		return 0;
+	if (strcmp(p1, p2) == 0)
+		return 1;
+	if (strncmp(p1, "/tmp/mnt/", 9) == 0 && strncmp(p2, "/mnt/", 5) == 0)
+		return (strcmp(p1 + 4, p2) == 0);
+	if (strncmp(p1, "/mnt/", 5) == 0 && strncmp(p2, "/tmp/mnt/", 9) == 0)
+		return (strcmp(p1, p2 + 4) == 0);
+	return 0;
+}
+
+/* Resolve user-specified mount path to canonical target directory */
+static void nvme_canonical_target_dir(const char *mount_path, int ro_root, char *out, size_t len)
+{
+	if (strcmp(mount_path, "/opt") == 0) {
+		strlcpy(out, ro_root ? "/tmp/mnt/opt" : "/opt", len);
+	}
+	else if (strncmp(mount_path, "/tmp/mnt/", 9) == 0) {
+		strlcpy(out, mount_path, len);
+	}
+	else if (strncmp(mount_path, "/mnt/", 5) == 0) {
+		snprintf(out, len, "/tmp/mnt/%s", mount_path + 5);
+	}
+	else {
+		snprintf(out, len, "/tmp/mnt/%s", mount_path);
+	}
+}
+
+/* "/opt" or "/mnt/<suffix>" or "/tmp/mnt/<suffix>": no '..', no trailing '/', limited character set */
 static int nvme_valid_mount_path(const char *s)
 {
-	const char *p;
+	const char *p, *sfx;
 
 	if (!s)
 		return 0;
 	if (strcmp(s, "/opt") == 0)
 		return 1;
-	if ((strncmp(s, "/mnt/", 5) != 0) || (s[5] == '\0') || (strcmp(s, "/mnt/opt") == 0) || (strncmp(s, "/mnt/opt/", 9) == 0))
+	if (strncmp(s, "/tmp/mnt/", 9) == 0)
+		sfx = s + 9;
+	else if (strncmp(s, "/mnt/", 5) == 0)
+		sfx = s + 5;
+	else
+		return 0;
+
+	if ((*sfx == '\0') || (strcmp(sfx, "opt") == 0) || (strncmp(sfx, "opt/", 4) == 0))
 		return 0;
 	if (strlen(s) >= sizeof(((rc_nvme_mount_t *)0)->mount_path))
 		return 0;
@@ -290,7 +328,7 @@ static int is_path_mounted(const char *dir)
 	if ((fp = setmntent("/proc/mounts", "r")) == NULL)
 		return 0;
 	while ((mnt = getmntent(fp)) != NULL) {
-		if (strcmp(mnt->mnt_dir, dir) == 0) {
+		if (mount_path_matches(mnt->mnt_dir, dir)) {
 			mounted = 1;
 			break;
 		}
@@ -308,7 +346,7 @@ static int is_dev_mounted_at(const char *dev, const char *dir)
 	if ((fp = setmntent("/proc/mounts", "r")) == NULL)
 		return 0;
 	while ((mnt = getmntent(fp)) != NULL) {
-		if ((strcmp(mnt->mnt_fsname, dev) == 0) && (strcmp(mnt->mnt_dir, dir) == 0)) {
+		if ((strcmp(mnt->mnt_fsname, dev) == 0) && mount_path_matches(mnt->mnt_dir, dir)) {
 			mounted = 1;
 			break;
 		}
@@ -331,8 +369,8 @@ static int nvme_unmount_dev_except(const char *dev, const char *keep1, const cha
 	while (((mnt = getmntent(fp)) != NULL) && (dcount < (int)(sizeof(dirs) / sizeof(dirs[0])))) {
 		if (strcmp(mnt->mnt_fsname, dev) != 0)
 			continue;
-		if ((keep1 && (strcmp(mnt->mnt_dir, keep1) == 0)) ||
-		    (keep2 && (strcmp(mnt->mnt_dir, keep2) == 0)))
+		if ((keep1 && mount_path_matches(mnt->mnt_dir, keep1)) ||
+		    (keep2 && mount_path_matches(mnt->mnt_dir, keep2)))
 			continue;
 		strlcpy(dirs[dcount++], mnt->mnt_dir, sizeof(dirs[0]));
 	}
@@ -344,7 +382,7 @@ static int nvme_unmount_dev_except(const char *dev, const char *keep1, const cha
 			rc = -1;
 			break;
 		}
-		if (strncmp(dirs[i], "/mnt/", 5) == 0)
+		if (strncmp(dirs[i], "/tmp/mnt/", 9) == 0 || strncmp(dirs[i], "/mnt/", 5) == 0)
 			rmdir(dirs[i]);
 	}
 	return rc;
@@ -366,7 +404,7 @@ static void nvme_unmount_nvme_at_path(const char *dir, const char *keep_dev)
 	if ((fp = setmntent("/proc/mounts", "r")) == NULL)
 		return;
 	while ((mnt = getmntent(fp)) != NULL) {
-		if ((strcmp(mnt->mnt_dir, dir) == 0) &&
+		if (mount_path_matches(mnt->mnt_dir, dir) &&
 		    nvme_valid_partition(mnt->mnt_fsname) &&
 		    (!keep_dev || (strcmp(mnt->mnt_fsname, keep_dev) != 0))) {
 			strlcpy(other_dev, mnt->mnt_fsname, sizeof(other_dev));
@@ -456,7 +494,7 @@ static int parse_nvme_mounts_string(const char *data, rc_nvme_mount_t *out_mount
 		}
 
 		for (dup = 0, i = 0; i < count; ++i) {
-			if ((strcmp(out_mounts[i].device, dev) == 0) || (strcmp(out_mounts[i].mount_path, path) == 0)) {
+			if ((strcmp(out_mounts[i].device, dev) == 0) || mount_path_matches(out_mounts[i].mount_path, path)) {
 				dup = 1;
 				break;
 			}
@@ -562,7 +600,7 @@ int nvme_main(int argc, char *argv[])
 						logmsg(LOG_DEBUG, "nvme: %s was not unmounted (not mounted or busy)", dirs[i]);
 					}
 				}
-				else if (strncmp(dirs[i], "/mnt/", 5) == 0)
+				else if (strncmp(dirs[i], "/tmp/mnt/", 9) == 0 || strncmp(dirs[i], "/mnt/", 5) == 0)
 					rmdir(dirs[i]);
 			}
 		}
@@ -596,10 +634,14 @@ int nvme_main(int argc, char *argv[])
 					if (!rc_nvme_mounts[j].mount_at_boot) {
 						logmsg(LOG_INFO, "nvme: auto mount disabled for %s, unmounting", prev_dev);
 						nvme_unmount_partition(prev_dev);
-						if (strncmp(prev_mounts[i].mount_path, "/mnt/", 5) == 0 && !is_path_mounted(prev_mounts[i].mount_path))
+						if ((strncmp(prev_mounts[i].mount_path, "/tmp/mnt/", 9) == 0 || strncmp(prev_mounts[i].mount_path, "/mnt/", 5) == 0) && !is_path_mounted(prev_mounts[i].mount_path))
 							rmdir(prev_mounts[i].mount_path);
-						if (strcmp(prev_mounts[i].mount_path, "/opt") == 0 && !is_path_mounted("/mnt/opt"))
-							rmdir("/mnt/opt");
+						if (strcmp(prev_mounts[i].mount_path, "/opt") == 0) {
+							if (!is_path_mounted("/tmp/mnt/opt"))
+								rmdir("/tmp/mnt/opt");
+							if (!is_path_mounted("/mnt/opt"))
+								rmdir("/mnt/opt");
+						}
 					}
 					break;
 				}
@@ -608,10 +650,14 @@ int nvme_main(int argc, char *argv[])
 			if (!found) {
 				logmsg(LOG_INFO, "nvme: mount path cleared for %s, unmounting", prev_dev);
 				nvme_unmount_partition(prev_dev);
-				if (strncmp(prev_mounts[i].mount_path, "/mnt/", 5) == 0 && !is_path_mounted(prev_mounts[i].mount_path))
+				if ((strncmp(prev_mounts[i].mount_path, "/tmp/mnt/", 9) == 0 || strncmp(prev_mounts[i].mount_path, "/mnt/", 5) == 0) && !is_path_mounted(prev_mounts[i].mount_path))
 					rmdir(prev_mounts[i].mount_path);
-				if (strcmp(prev_mounts[i].mount_path, "/opt") == 0 && !is_path_mounted("/mnt/opt"))
-					rmdir("/mnt/opt");
+				if (strcmp(prev_mounts[i].mount_path, "/opt") == 0) {
+					if (!is_path_mounted("/tmp/mnt/opt"))
+						rmdir("/tmp/mnt/opt");
+					if (!is_path_mounted("/mnt/opt"))
+						rmdir("/mnt/opt");
+				}
 			}
 		}
 	}
@@ -619,7 +665,7 @@ int nvme_main(int argc, char *argv[])
 	/* First pass: resolve device nodes by UUID and unmount any old/changed mountpoints across all
 	 * configured entries before mounting, so swapping or reassigning paths between partitions works. */
 	for (i = 0; i < rc_nvme_mounts_count; i++) {
-		char partition[64];
+		char partition[64], target_buf[128];
 		const char *mount_path = rc_nvme_mounts[i].mount_path;
 		const char *target_dir;
 		int is_opt, ro_root, has_uuid, found_uuid = 0;
@@ -630,7 +676,8 @@ int nvme_main(int argc, char *argv[])
 		strlcpy(partition, rc_nvme_mounts[i].device, sizeof(partition));
 		is_opt = (strcmp(mount_path, "/opt") == 0);
 		ro_root = is_opt ? root_is_readonly() : 0;
-		target_dir = (is_opt && ro_root) ? "/mnt/opt" : mount_path;
+		nvme_canonical_target_dir(mount_path, ro_root, target_buf, sizeof(target_buf));
+		target_dir = target_buf;
 		has_uuid = (rc_nvme_mounts[i].uuid[0] != '\0');
 
 		/* device numbering can change between boots: prefer the filesystem UUID when it is known */
@@ -685,7 +732,7 @@ int nvme_main(int argc, char *argv[])
 
 	/* Second pass: mount all enabled entries. */
 	for (i = 0; i < rc_nvme_mounts_count; i++) {
-		char partition[64], mount_path[128], fstype[16];
+		char partition[64], mount_path[128], target_buf[128], fstype[16];
 		const char *target_dir;
 		int is_opt, ro_root;
 
@@ -696,7 +743,8 @@ int nvme_main(int argc, char *argv[])
 		strlcpy(mount_path, rc_nvme_mounts[i].mount_path, sizeof(mount_path));
 		is_opt = (strcmp(mount_path, "/opt") == 0);
 		ro_root = is_opt ? root_is_readonly() : 0;
-		target_dir = (is_opt && ro_root) ? "/mnt/opt" : mount_path;
+		nvme_canonical_target_dir(mount_path, ro_root, target_buf, sizeof(target_buf));
+		target_dir = target_buf;
 
 		if (!is_dev_mounted_at(partition, target_dir)) {
 			/* If another NVMe partition whose mount path was cleared was occupying this target path, unmount it first */
@@ -729,7 +777,7 @@ int nvme_main(int argc, char *argv[])
 			rc = eval("mount", "-t", fstype, "-o", "noatime,nodiratime", partition, (char *)target_dir, NULL);
 			if (rc != 0) {
 				logmsg(LOG_ERR, "nvme: failed to mount %s on %s (%s, exit code %d)", partition, target_dir, fstype, rc);
-				if (strncmp(target_dir, "/mnt/", 5) == 0)
+				if (strncmp(target_dir, "/tmp/mnt/", 9) == 0 || strncmp(target_dir, "/mnt/", 5) == 0)
 					rmdir(target_dir);
 				continue;
 			}
@@ -742,14 +790,14 @@ int nvme_main(int argc, char *argv[])
 				logmsg(LOG_ERR, "nvme: /opt is already mounted, cannot bind mount %s", partition);
 				continue;
 			}
-			rc = eval("mount", "-o", "bind", "/mnt/opt", "/opt", NULL);
+			rc = eval("mount", "-o", "bind", "/tmp/mnt/opt", "/opt", NULL);
 			if (rc != 0) {
-				logmsg(LOG_ERR, "nvme: failed to bind mount /mnt/opt on /opt (exit code %d)", rc);
-				if ((umount("/mnt/opt") == 0) || (umount2("/mnt/opt", MNT_FORCE) == 0))
-					rmdir("/mnt/opt");
+				logmsg(LOG_ERR, "nvme: failed to bind mount /tmp/mnt/opt on /opt (exit code %d)", rc);
+				if ((umount("/tmp/mnt/opt") == 0) || (umount2("/tmp/mnt/opt", MNT_FORCE) == 0))
+					rmdir("/tmp/mnt/opt");
 			}
 			else
-				logmsg(LOG_INFO, "nvme: bind mounted /mnt/opt on /opt for %s", partition);
+				logmsg(LOG_INFO, "nvme: bind mounted /tmp/mnt/opt on /opt for %s", partition);
 		}
 	}
 

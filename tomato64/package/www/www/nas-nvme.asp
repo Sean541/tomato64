@@ -24,7 +24,7 @@ var mountPathRe = /^[A-Za-z0-9_.\-\/]+$/;
 function mountSuffix(p) {
 	var s = ('' + p).trim();
 	if (s == '/opt') return 'opt';
-	return s.replace(/^\/mnt\//, '');
+	return s.replace(/^(\/tmp)?\/mnt\//, '');
 }
 (function() {
 	for (var d in nvme_disks) {
@@ -121,7 +121,7 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 			type: 'text',
 			maxlen: 20,
 			edit: '1',
-			prefix: '<span class="grid-prefix">/mnt/<\/span>'
+			prefix: '<span class="grid-prefix">/tmp/mnt/<\/span>'
 		},
 		{
 			type: 'checkbox'
@@ -185,7 +185,7 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 		var s = f[0].value.trim();
 		if (!quiet) f[0].value = s;
 		var pfx = f[0].parentNode ? f[0].parentNode.querySelector('.grid-prefix') : null;
-		if (pfx) pfx.textContent = (s == 'opt') ? '/' : '/mnt/';
+		if (pfx) pfx.textContent = (s == 'opt') ? '/' : '/tmp/mnt/';
 		if (!boot) {
 			ferror.clear(f[0]);
 			return 1;
@@ -212,7 +212,7 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 			for (var j = 0; j < d.length; ++j) {
 				if (d[j][6] == 1) continue;
 				if (d[j][3] == s) {
-					ferror.set(f[0], 'Duplicate mount path: ' + ((s == 'opt') ? '/opt' : '/mnt/' + s), quiet);
+					ferror.set(f[0], 'Duplicate mount path: ' + ((s == 'opt') ? '/opt' : '/tmp/mnt/' + s), quiet);
 					return 0;
 				}
 			}
@@ -220,7 +220,7 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 				var ef = gOther.editor ? fields.getAll(gOther.editor) : null;
 				var es = (ef && ef[0]) ? ef[0].value.trim() : (gOther.source ? (gOther.source.getRowData()[3] || '') : '');
 				if (es != '' && es == s) {
-					ferror.set(f[0], 'Duplicate mount path: ' + ((s == 'opt') ? '/opt' : '/mnt/' + s), quiet);
+					ferror.set(f[0], 'Duplicate mount path: ' + ((s == 'opt') ? '/opt' : '/tmp/mnt/' + s), quiet);
 					return 0;
 				}
 			}
@@ -255,10 +255,10 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 				var pfx = f[0].parentNode ? f[0].parentNode.querySelector('.grid-prefix') : null;
 				if (pfx) {
 					pfx.style.display = '';
-					pfx.textContent = (f[0].value.trim() == 'opt') ? '/' : '/mnt/';
+					pfx.textContent = (f[0].value.trim() == 'opt') ? '/' : '/tmp/mnt/';
 				}
 				f[0].oninput = function() {
-					if (pfx) pfx.textContent = (f[0].value.trim() == 'opt') ? '/' : '/mnt/';
+					if (pfx) pfx.textContent = (f[0].value.trim() == 'opt') ? '/' : '/tmp/mnt/';
 				};
 				var updateMountState = function() {
 					if (f[1].checked) {
@@ -274,7 +274,7 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 						f[0].style.backgroundColor = '#e9ecef';
 						f[0].style.cursor = 'not-allowed';
 						ferror.clear(f[0]);
-						if (pfx) pfx.textContent = '/mnt/';
+						if (pfx) pfx.textContent = '/tmp/mnt/';
 					}
 				};
 				f[1].onclick = updateMountState;
@@ -316,7 +316,7 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 		if (is_foreign) {
 			mpText = '<span class="text-muted" style="color:#888;">' + escapeHTML(data[5] || p) + ' <small><i>(system)<\/i><\/small><\/span>';
 		} else if (p != '') {
-			mpText = (p == 'opt') ? '/opt' : '/mnt/' + escapeHTML(p);
+			mpText = (p == 'opt') ? '/opt' : ('/tmp/mnt/' + escapeHTML(p));
 		} else {
 			mpText = '';
 		}
@@ -347,8 +347,12 @@ function nvmeSetupGrid(g, grid_id, partitions) {
 			path: '',
 			boot: 0
 		};
-		var expected_mp = (saved.path != '') ? ((saved.path == 'opt') ? '/opt' : ('/mnt/' + saved.path)) : '';
-		var is_our_mount = (active_mp != '' && saved.boot == 1 && (active_mp == expected_mp || (saved.path == 'opt' && active_mp == '/mnt/opt')));
+		var expected_mp = (saved.path != '') ? ((saved.path == 'opt') ? '/opt' : ('/tmp/mnt/' + saved.path)) : '';
+		var is_our_mount = (active_mp != '' && saved.boot == 1 && (
+			active_mp == expected_mp ||
+			(saved.path == 'opt' && (active_mp == '/mnt/opt' || active_mp == '/tmp/mnt/opt')) ||
+			(saved.path != 'opt' && active_mp == '/mnt/' + saved.path)
+		));
 		var is_foreign = (active_mp != '' && !is_our_mount) ? 1 : 0;
 		g.insertData(-1, [
 			dev_node,
@@ -437,11 +441,11 @@ function save(nomsg) {
 			}
 			if (dev == '') continue;
 			if (seen[sfx]) {
-				alert('Duplicate mount path: ' + ((sfx == 'opt') ? '/opt' : '/mnt/' + sfx));
+				alert('Duplicate mount path: ' + ((sfx == 'opt') ? '/opt' : '/tmp/mnt/' + sfx));
 				return;
 			}
 			seen[sfx] = 1;
-			var mp = (sfx == 'opt') ? '/opt' : '/mnt/' + sfx;
+			var mp = (sfx == 'opt') ? '/opt' : '/tmp/mnt/' + sfx;
 			r.push(dev + '>' + mp + '>1>' + (nvmeUuid[dev] || '') + '<');
 		}
 
@@ -525,9 +529,9 @@ function init() {
 <script>writeToggleSectionTitle('Notes', 'notes');</script>
 <div class="section" id="sesdiv_notes" style="display:none">
 <ul>
-<li><b>Mount Path</b> - Folder created under <i>/mnt</i>. Use letters, digits, <i>_ . -</i> and <i>/</i> only; each path must be unique. Entering: &nbsp;<i><b>opt</b></i>&nbsp; :as the mount path will mount the partition to <i>/opt</i> ( or bind-mount it from <i>/mnt/opt</i> to <i>/opt</i> if the root filesystem is read-only ). Auto Mount must be enabled first to edit the Mount Path field.</li>
+<li><b>Mount Path</b> - Folder created under <i>/tmp/mnt</i>. Use letters, digits, <i>_ . -</i> and <i>/</i> only; each path must be unique. Entering: &nbsp;<i><b>opt</b></i>&nbsp; :as the mount path will mount the partition to <i>/opt</i> ( or bind-mount it from <i>/tmp/mnt/opt</i> to <i>/opt</i> if the root filesystem is read-only ). Auto Mount must be enabled first to edit the Mount Path field.</li>
 <br>
-<li><b>Auto Mount</b> - Mount the partition when the router starts or when settings are saved. Enabling Auto Mount unlocks the Mount Path field. Disabling Auto Mount ( or saving an entry without a Mount Path ) will unmount the partition and clean up its mount directory under <i>/mnt</i>.</li>
+<li><b>Auto Mount</b> - Mount the partition when the router starts or when settings are saved. Enabling Auto Mount unlocks the Mount Path field. Disabling Auto Mount ( or saving an entry without a Mount Path ) will unmount the partition and clean up its mount directory under <i>/tmp/mnt</i>.</li>
 <br>
 <li><b>System / External Mounts</b> - If a partition is currently mounted by other means ( system, scripts etc ) rather than by this GUI, you will not be able to make any changes to it here. Disable any auto mounting for the drive, unmount it, then reload this page to access the options.</li>
 <br>
