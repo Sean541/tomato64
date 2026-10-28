@@ -2733,7 +2733,8 @@ void stop_services(void)
 	stop_bridger();
 #endif /* TOMATO64_HAS_BRIDGER */
 #endif
-	stop_nvme();
+	if ((check_action() != ACT_REBOOT) && !nvram_get_int("g_reboot") && !nvram_get_int("g_upgrade"))
+		stop_nvme();
 }
 
 #include "services.h"

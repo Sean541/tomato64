@@ -303,7 +303,10 @@ struct mntent *findmntents(char *file, int swp, int (*func)(struct mntent *mnt, 
 		}
 	}
 	while ((mnt = getmntent(f)) != NULL) {
-		/* Always ignore rootfs mount */
+		/* Always ignore rootfs and nvram mounts */
+		if (strcmp(mnt->mnt_dir, "/") == 0 || strcmp(mnt->mnt_dir, "/nvram") == 0)
+			continue;
+
 		if (strcmp(mnt->mnt_fsname, "rootfs") == 0)
 			continue;
 

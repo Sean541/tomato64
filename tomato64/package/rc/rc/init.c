@@ -504,6 +504,14 @@ static void shutdn(int rb)
 	}
 	sync();
 
+	/* Unmount storage now that all user processes are dead */
+	stop_nvme();
+#ifdef TCONFIG_USB
+	remove_storage_main(1);
+	stop_usb();
+#endif /* TCONFIG_USB */
+	sync();
+
 #ifndef TOMATO64
 	eval("umount", "-f", "/jffs");
 	sleep(1);
@@ -11221,11 +11229,6 @@ int init_main(int argc, char *argv[])
 				stop_jffs2();
 #endif /* TOMATO64 */
 				stop_syslog();
-#ifdef TCONFIG_USB
-				remove_storage_main(1);
-				stop_usb();
-				sleep(1);
-#endif /* TCONFIG_USB */
 				shutdn(state == SIGTERM); /* REBOOT */
 				sync(); sync(); sync();
 				exit(0);

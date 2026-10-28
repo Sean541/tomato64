@@ -545,13 +545,23 @@ int nvme_main(int argc, char *argv[])
 			char dirs[NVME_MAX_MOUNTS * 2][128];
 			int dcount = 0;
 			while (((mnt = getmntent(fp)) != NULL) && (dcount < (int)(sizeof(dirs) / sizeof(dirs[0])))) {
+				/* Protect root and nvram mounts */
+				if (strcmp(mnt->mnt_dir, "/") == 0 || strcmp(mnt->mnt_dir, "/nvram") == 0)
+					continue;
 				if (nvme_valid_partition(mnt->mnt_fsname))
 					strlcpy(dirs[dcount++], mnt->mnt_dir, sizeof(dirs[0]));
 			}
 			endmntent(fp);
 			for (i = dcount - 1; i >= 0; i--) {
-				if ((umount(dirs[i]) != 0) && (umount2(dirs[i], MNT_FORCE) != 0) && (umount2(dirs[i], MNT_DETACH) != 0))
-					logmsg(LOG_DEBUG, "nvme: %s was not unmounted (not mounted or busy)", dirs[i]);
+				if ((umount(dirs[i]) != 0) && (umount2(dirs[i], MNT_FORCE) != 0)) {
+					if ((check_action() == ACT_REBOOT) || nvram_get_int("g_reboot") || nvram_get_int("g_upgrade")) {
+						/* During shutdown or upgrade, remount ro instead of lazy detaching */
+						eval("mount", "-o", "remount,ro", dirs[i]);
+					}
+					else if (umount2(dirs[i], MNT_DETACH) != 0) {
+						logmsg(LOG_DEBUG, "nvme: %s was not unmounted (not mounted or busy)", dirs[i]);
+					}
+				}
 				else if (strncmp(dirs[i], "/mnt/", 5) == 0)
 					rmdir(dirs[i]);
 			}

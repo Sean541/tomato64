@@ -1048,16 +1048,17 @@ int umount_mountpoint(struct mntent *mnt, uint flags)
 		logmsg(LOG_INFO, "USB partition unmounted from %s", mnt->mnt_dir);
 
 	if (ret && ((flags & EFH_SHUTDN) != 0)) {
-		/* If system is stopping (not restarting), and we couldn't unmount the
-		 * partition, try to remount it as read-only. Ignore the return code -
-		 * we can still try to do a lazy unmount.
+		/* If system is shutting down, and we couldn't unmount the
+		 * partition, try to remount it as read-only.
+		 * Do NOT lazy unmount (MNT_DETACH) during shutdown, as that
+		 * detaches the mount from /proc/mounts and prevents subsequent
+		 * umount -a / SysRq-u barriers from cleanly syncing and finalizing it.
 		 */
 		eval("mount", "-o", "remount,ro", mnt->mnt_dir);
 	}
-
-	if (ret && ((flags & EFH_USER) == 0)) {
+	else if (ret && ((flags & EFH_USER) == 0)) {
 		/* Make one more try to do a lazy unmount unless it's an unmount
-		 * request from the Web GUI.
+		 * request from the Web GUI or system shutdown.
 		 * MNT_DETACH will expose the underlying mountpoint directory to all
 		 * except whatever has cd'ed to the mountpoint (thereby making it busy).
 		 * So the unmount can't actually fail. It disappears from the ken of
