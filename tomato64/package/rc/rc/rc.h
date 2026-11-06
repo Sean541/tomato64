@@ -204,6 +204,9 @@ extern int ip6down_main(int argc, char **argv);
 extern void start_redial(char *prefix);
 extern void stop_redial(char *prefix);
 extern int redial_main(int argc, char **argv);
+extern int wanlink_main(int argc, char **argv);
+extern void start_wanlink(char *prefix);
+extern void stop_wanlink(char *prefix);
 
 /* wan.c */
 extern void start_pptp(char *prefix);
@@ -242,6 +245,7 @@ extern void get_cidr(char *ipaddr, char *netmask, char *cidr, const size_t buf_s
 
 /* pbr.c */
 extern void ipt_routerpolicy(void);
+extern void mwan_pbr_update(int wan_unit, int up);
 
 /* network.c */
 extern void set_host_domain_name(void);

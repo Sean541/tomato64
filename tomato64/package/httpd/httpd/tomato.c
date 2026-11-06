@@ -34,7 +34,8 @@
 #define V_LENGTH(min, max)	VT_LENGTH,	{ .i = min },		{ .i = max }
 #define V_TEXT(min, max)	VT_TEXT,	{ .i = min },		{ .i = max }
 #define V_RANGE(min, max)	VT_RANGE,	{ .l = min },		{ .l = max }
-#define V_IP			VT_IP,		{ },			{ }
+#define V_IP			VT_IP,		{ .i = 1 },		{ }
+#define V_IPOPT			VT_IP,		{ .i = 0 },		{ }
 #define	V_OCTET			VT_RANGE,	{ .l = 0 },		{ .l = 255 }
 #define V_NUM			VT_RANGE,	{ .l = 0 },		{ .l = 0x7FFFFFFF }
 #define	V_TEMP			VT_TEMP,	{ }, 			{ }
@@ -500,7 +501,7 @@ const aspapi_t aspapi[] = {
  #define OVPNC_BLOCK(i) \
 	{ "vpnc" #i "_poll",		V_RANGE(0, 30)			}, \
 	{ "vpnc" #i "_tchk",		V_01				},	/* check if tunnel is up */ \
-	{ "vpnc" #i "_tunchk",		V_TEXT(0, 15)			},	/* IP to check the tunnel */ \
+	{ "vpnc" #i "_tunchk",		V_IPOPT				},	/* IP to check the tunnel */ \
 	{ "vpnc" #i "_if",		V_TEXT(3, 3)			},	/* tap, tun */ \
 	{ "vpnc" #i "_bridge",		V_01				}, \
 	{ "vpnc" #i "_nat",		V_01				}, \
@@ -546,7 +547,7 @@ const aspapi_t aspapi[] = {
 	{ "wg" #i "_enable",		V_01				}, \
 	{ "wg" #i "_poll",		V_RANGE(0, 30)			}, \
 	{ "wg" #i "_tchk",		V_01				},	/* check if tunnel is up */ \
-	{ "wg" #i "_tunchk",		V_TEXT(0, 15)			},	/* IP to check the tunnel */ \
+	{ "wg" #i "_tunchk",		V_IPOPT				},	/* IP to check the tunnel */ \
 	{ "wg" #i "_sleep",		V_RANGE(1, 99)			},	/* delay at startup */ \
 	{ "wg" #i "_file",		V_TEXT(0, 64)			}, \
 	{ "wg" #i "_key",		V_TEXT(0, 44)			}, \
@@ -2505,9 +2506,12 @@ static int webcgi_nvram_set(const nvset_t *v, const char *name, int write)
 				ok = 0;
 			break;
 		case VT_IP:
-			if ((sscanf(p, "%3u.%3u.%3u.%3u", &u[0], &u[1], &u[2], &u[3]) != 4) ||
-			    (u[0] > 255) || (u[1] > 255) || (u[2] > 255) || (u[3] > 255))
-				ok = 0;
+			if (strlen(p) > 0 || v->va.i) {
+				char tail;
+				if ((sscanf(p, "%3u.%3u.%3u.%3u%c", &u[0], &u[1], &u[2], &u[3], &tail) != 4) ||
+				    (u[0] > 255) || (u[1] > 255) || (u[2] > 255) || (u[3] > 255))
+					ok = 0;
+			}
 			break;
 		case VT_MAC:
 			if ((sscanf(p, "%2x:%2x:%2x:%2x:%2x:%2x", &u[0], &u[1], &u[2], &u[3], &u[4], &u[5]) != 6) ||
@@ -2549,16 +2553,45 @@ static int webcgi_nvram_set(const nvset_t *v, const char *name, int write)
 
 static int nv_wl_find(int idx, int unit, int subunit, void *param)
 {
+	static const char *const secret_fields[] = {
+		"wpa_psk", "passphrase", "key1", "key2", "key3", "key4"
+	};
 	nv_list_t *p = param;
+	const char *security = webcgi_get(wl_nvname("security_mode", unit, subunit));
+	int open_network = (security && strcmp(security, "disabled") == 0);
+	const char *name;
+	int ok, i;
 
-	int ok = webcgi_nvram_set(p->v, wl_nvname(p->v->name + 3, unit, subunit), p->write);
+	/*
+	 * The security mode is in the same POST as the credentials. For an
+	 * open network, ignore even stale posted credentials and clear them
+	 * below when processing wl_security_mode. Keep PSK validation intact
+	 * for every other security mode.
+	 */
+	if (open_network) {
+		for (i = 0; i < (int)(sizeof(secret_fields) / sizeof(secret_fields[0])); ++i) {
+			if (strcmp(p->v->name + 3, secret_fields[i]) == 0)
+				return 0;
+		}
+	}
 
+	name = wl_nvname(p->v->name + 3, unit, subunit);
+	ok = webcgi_nvram_set(p->v, name, p->write);
 	if (ok < 0)
 		return 1;
-	else {
-		p->dirty |= ok;
-		return 0;
+
+	if (p->write && open_network && strcmp(p->v->name, "wl_security_mode") == 0) {
+		for (i = 0; i < (int)(sizeof(secret_fields) / sizeof(secret_fields[0])); ++i) {
+			const char *key = wl_nvname(secret_fields[i], unit, subunit);
+			if (*nvram_safe_get(key)) {
+				nvram_set(key, "");
+				ok = 1;
+			}
+		}
 	}
+
+	p->dirty |= ok;
+	return 0;
 }
 
 #if defined(TCONFIG_BCMARM) || defined(CONFIG_BCMWL6)

@@ -29,6 +29,7 @@
 
 var cmdresult = '';
 var xob = null;
+var currentFilename = '';
 
 /* TOMATO64-BEGIN */
 // BCM53XX devices: t_model_name comes from the device tree; map model -> update
@@ -67,11 +68,11 @@ var bcm53xxDevices = {
 };
 
 // Expected update-file extension for the current model:
-//   MT3600BE -> OpenWrt sysupgrade tar (-sysupgrade.bin)
+//   MT3600BE, BE12 Pro -> OpenWrt sysupgrade tar (-sysupgrade.bin)
 //   BCM53XX  -> bare Broadcom TRX (.trx)
 //   others   -> Tomato64 update archive (.tzst)
 function fwExpectedExt(model) {
-	if (model == 'GL.iNet GL-MT3600BE')
+	if (model == 'GL.iNet GL-MT3600BE' || model == 'Tenda BE12 Pro')
 		return { re: /-sysupgrade\.bin$/i, msg: '-sysupgrade.bin' };
 	if (model in bcm53xxDevices)
 		return { re: /\.trx$/i, msg: '.trx' };
@@ -87,14 +88,16 @@ function clock() {
 function displayFilename() {
 	var afu_fname = E('afu-fname');
 
-	if (cmdresult) {
-		elem.setInnerHTML(afu_fname, '&nbsp; '+escapeText(cmdresult));
-		afu_fname.style.display = 'block';
+	currentFilename = cmdresult || '';
+	if (currentFilename) {
+		elem.setInnerHTML(afu_fname, escapeText(currentFilename));
+		afu_fname.style.display = 'inline';
 	}
 	else
 		afu_fname.style.display = 'none';
 
 	cmdresult = '';
+	updateFilenameDiff();
 }
 
 function fetchFilename() {
@@ -112,6 +115,37 @@ function fetchFilename() {
 	}
 	var c = 'ls -1 /rom/filename 2>/dev/null | head -n1';
 	xob.post('shell.cgi', 'action=execute&command='+escapeCGI(c.replace(/\r/g, '')));
+}
+
+function updateFilenameDiff() {
+	var selected = E('afu-selected-fname');
+	var file = E('afu-file').value;
+	var name = file ? file.replace(/^.*[\\\/]/, '') : '';
+
+	if (!name) {
+		selected.innerHTML = '';
+		return;
+	}
+
+	if (!currentFilename) {
+		selected.innerHTML = escapeText(name);
+		return;
+	}
+
+	var a = name.toLowerCase();
+	var b = currentFilename.toLowerCase();
+	var html = '';
+	var i;
+
+	for (i = 0; i < name.length; i++) {
+		var ch = name.charAt(i);
+		if (i >= b.length || a.charAt(i) != b.charAt(i))
+			html += '<span class="afu-diff">'+escapeText(ch)+'<\/span>';
+		else
+			html += escapeText(ch);
+	}
+
+	selected.innerHTML = html;
 }
 
 function upgrade() {
@@ -159,6 +193,11 @@ function upgrade() {
 			regex: /gl-mt3600be/i,
 			name: 'GL-MT3600BE',
 			message: 'gl-mt3600be'
+		},
+		'Tenda BE12 Pro': {
+			regex: /tenda-be12-pro/i,
+			name: 'BE12 Pro',
+			message: 'tenda-be12-pro'
 		},
 		'GL.iNet GL-BE14000': {
 			regex: /be14000/i,
@@ -328,7 +367,7 @@ function upgrade() {
 
 function earlyInit() {
 	E('upgradenotice').style.display = (nvram.remote_upgrade == 1 ? 'none' : 'block');
-	E('afu-size').innerHTML = '&nbsp; '+scaleSize(sysinfo.totalfreeram)+'&nbsp; <small>(approx. size that can be buffered completely in RAM)<\/small>';
+	E('afu-size').innerHTML = scaleSize(sysinfo.totalfreeram)+'&nbsp; <small>(approx. file size that can be buffered in RAM)<\/small>';
 /* JFFS2-BEGIN */
 	if (nvram.jffs2_on != 0 && nvram.jffs2_auto_unmount == 0) {
 		E('afu-warn').style.display = 'block';
@@ -361,51 +400,39 @@ function earlyInit() {
 <!--USBAP-END -->
 		<div class="fields" id="upgradenotice" style="display:none"><div class="about"><b>Note: Remote upgrade is disabled. You can enable it (not recommended) <a href="admin-access.asp">here</a>.</b></div></div>
 		<div>
-			<form name="form_reset" action="javascript:{}">
-				<div class="afu-form">
-					<input type="checkbox" id="f_reset">&nbsp; &nbsp; Erase all data in NVRAM. Optional. This is performed between the firmware upload and the reboot.
-/* TOMATO64-X86_64-BEGIN */
-					<br><input type="checkbox" id="f_fastreboot">&nbsp; &nbsp; After flashing, perform a Fast Reboot <small>(Run locally the first time to ensure correct functionality)</small>
-/* TOMATO64-X86_64-END */
-				</div>
-			</form>
-/* TOMATO64-REMOVE-BEGIN */
-			<div class="afu-form">Select a valid <a href="https://freshtomato.org/downloads/">firmware</a> to install (.trx or .bin):</div>
-/* TOMATO64-REMOVE-END */
-/* TOMATO64-BEGIN */
-			<div class="afu-form">Select a valid <a href="https://tomato64.org/files/">firmware</a> to install (<script>document.write(fwExpectedExt(nvram.t_model_name).msg);</script>):</div>
-/* TOMATO64-END */
 			<form name="form_upgrade" method="post" action="upgrade.cgi" enctype="multipart/form-data">
-				<div class="afu-form">
-					<input type="file" name="file" class="upgrade-file">
-					<p>
-					<input type="button" id="afu-upgrade-button" value="Upgrade" onclick="upgrade()">
-				</div>
-			</form>
-			<table class="afu-info-table"><tr>
-				<td>Current Version:</td>
+				<script>
 /* TOMATO64-REMOVE-BEGIN */
-				<td>&nbsp; <% version(1); %></td>
+				createFieldTable('', [ { title: 'Current Version:',text: '<% version(1); %>' },
 /* TOMATO64-REMOVE-END */
 /* TOMATO64-BEGIN */
-				<td>&nbsp; <% version(1); %><% version(4); %></td>
+				createFieldTable('', [ { title: 'Current Version:',text: '<% version(1); %><% version(4); %>' },
 /* TOMATO64-END */
-			</tr>
-
+				                       { title: 'Free RAM:',text: '<span id="afu-size"></span>' },
+				                       null,
+				                       { title: 'Erase NVRAM',text: '<input type="checkbox" id="f_reset"> <small>Restore firmware default settings as part of the upgrade<\/small>' },
+/* TOMATO64-X86_64-BEGIN */
+				                       { title: 'Fast Reboot',text: '<input type="checkbox" id="f_fastreboot"> <small>Perform a Fast Reboot after flashing (run locally the first time to ensure correct functionality)<\/small>' },
+/* TOMATO64-X86_64-END */
+				                       null,
 /* TOMATO64-REMOVE-BEGIN */
-			<tr>
-				<td>Current Filename:</td>
-				<td id="afu-fname"></td>
-			</tr>
+				                       { title: '&nbsp;',text: 'Select a <a href="https://freshtomato.org/downloads/"> valid firmware<\/a> to install (.trx or .bin):' },
+				                       { title: 'Current File:',text: '<span id="afu-fname" class="disabled"><\/span>' },
 /* TOMATO64-REMOVE-END */
-
-
-			<tr>
-				<td>Free Memory:</td>
-				<td id="afu-size"></td>
-			</tr></table>
+/* TOMATO64-BEGIN */
+				                       { title: '&nbsp;',text: 'Select a <a href="https://tomato64.org/files/"> valid firmware<\/a> to install ('+fwExpectedExt(nvram.t_model_name).msg+'):' },
+/* TOMATO64-END */
+/* TOMATO64-REMOVE-BEGIN */
+				                       { title: 'Upgrade File:',text: '<div id="afu-selected-fname"><\/div><input type="file" id="afu-file" name="file" class="afu-file-input" onchange="updateFilenameDiff()">' },
+/* TOMATO64-REMOVE-END */
+/* TOMATO64-BEGIN */
+				                       { title: 'Upgrade File:',text: '<input type="file" id="afu-file" name="file" class="afu-file-input" onchange="updateFilenameDiff()"><div id="afu-selected-fname"><\/div>' },
+/* TOMATO64-END */
+				                       { title: '&nbsp;',text: '<input type="button" id="afu-upgrade-button" value="🛠️ Upgrade" onclick="upgrade()">' }
+				]);
+				</script>
+			</form>
 		</div>
-
 	</div>
 </div>
 
@@ -416,7 +443,7 @@ function earlyInit() {
 	<b>Upgrading firmware with JFFS enabled is not possible. You might now:</b><br><br>
 	- <a href="admin-jffs2.asp">Manually unmount the JFFS partition</a> first before re-attempting the upgrade<br><br>
 	- <a href="admin-access.asp">Enable the Unmount JFFS during upgrade</a> option<br><br>
-	In either cases make sure you have a backup of the content as, due to the operation performed, it is not guaranteed the content of JFFS will be preserved. 
+	In either cases make sure you have a backup of the content as, due to the operation performed, it is not guaranteed the content of JFFS will be preserved.
 </div>
 <!--JFFS2-END -->
 

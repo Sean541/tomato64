@@ -582,10 +582,11 @@ static void handle_reap(int sig)
 	raise(SIGALRM);
 }
 
-#if defined(TOMATO64_MT3600BE) || defined(TOMATO64_BCM53XX)
+#ifdef TOMATO64_HAS_UBI_SYSUPGRADE
 /* Sysupgrade re-exec hook: execve pid1 into the static stub in tmpfs to
  * drop its /romfs mmaps so nand_upgrade_prepare_ubi can free the rootfs
- * ubiblock. Triggered by SIGURG from /sbin/tomato64-sysupgrade(-bcm53xx). */
+ * ubiblock. Triggered by SIGURG from /sbin/tomato64-sysupgrade(-bcm53xx)
+ * on every HAS_UBI_SYSUPGRADE device. */
 static void handle_tomato64_reexec(int sig)
 {
 	static const char *path = "/tmp/tomato64-init-stub";
@@ -598,7 +599,7 @@ static void handle_tomato64_reexec(int sig)
 
 	execve(path, new_argv, new_envp);
 }
-#endif /* TOMATO64_MT3600BE || TOMATO64_BCM53XX */
+#endif /* TOMATO64_HAS_UBI_SYSUPGRADE */
 
 static int check_nv(const char *name, const char *value)
 {
@@ -701,12 +702,15 @@ static int invalid_mac(const char *mac)
 static int get_mac_from_mt0(unsigned long address)
 {
 	FILE *fp;
-	char m[6], s[18];
+	unsigned char m[6];
+	char s[18];
 
 	snprintf(s, sizeof(s), MTD_DEV(%dro), 0);
 	if ((fp = fopen(s, "rb"))) {
-		fseek(fp, address, SEEK_SET);
-		fread(m, sizeof(m), 1, fp);
+		if ((fseek(fp, address, SEEK_SET) != 0) || (fread(m, 1, sizeof(m), fp) != sizeof(m))) {
+			fclose(fp);
+			return -EIO;
+		}
 		fclose(fp);
 		snprintf(s, sizeof(s), "%02X:%02X:%02X:%02X:%02X:%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
 
@@ -733,10 +737,18 @@ static int find_dir320_mac_addr(void)
 	snprintf(s, sizeof(s), MTD_DEV(%dro), part);
 
 	if ((fp = fopen(s, "rb"))) {
-		buffer = malloc(size);
-		memset(buffer, 0, size);
-		fread(buffer, size, 1, fp);
-		if (!memcmp(buffer, "RGCFG1", 6)) {
+		if ((size <= 0) || ((buffer = malloc((size_t)size)) == NULL)) {
+			fclose(fp);
+			goto out;
+		}
+
+		if (fread(buffer, 1, (size_t)size, fp) != (size_t)size) {
+			free(buffer);
+			fclose(fp);
+			goto out;
+		}
+
+		if ((size >= 6) && !memcmp(buffer, "RGCFG1", 6)) {
 			for (i = 6; i < size - 24; i++) {
 				if (!memcmp(buffer + i, "lanmac=", 7)) {
 					memcpy(s, buffer + i + 7, 17);
@@ -10416,6 +10428,9 @@ static int init_nvram(void)
 #ifdef TOMATO64_MT3600BE
 	nvram_set("t_model_name", "GL.iNet GL-MT3600BE");
 #endif /* TOMATO64_MT3600BE */
+#ifdef TOMATO64_BE12PRO
+	nvram_set("t_model_name", "Tenda BE12 Pro");
+#endif /* TOMATO64_BE12PRO */
 #ifdef TOMATO64_BE14000
 	nvram_set("t_model_name", "GL.iNet GL-BE14000");
 #endif /* TOMATO64_BE14000 */
@@ -10807,7 +10822,7 @@ static void sysinit(void)
 #else
 	eval("/etc/init.d/S10mdev", "start");
 
-#if defined(TOMATO64_MT3600BE) || defined(TOMATO64_BCM53XX)
+#ifdef TOMATO64_HAS_UBI_SYSUPGRADE
 	eval("touch", "/tmp/.preinit");
 	eval("mount_root");
 
@@ -10820,7 +10835,7 @@ static void sysinit(void)
 		eval("tar", "-xzf", "/sysupgrade.tgz", "-C", "/");
 		unlink("/sysupgrade.tgz");
 	}
-#endif /* TOMATO64_MT3600BE || TOMATO64_BCM53XX */
+#endif /* TOMATO64_HAS_UBI_SYSUPGRADE */
 #ifdef TOMATO64_BCM53XX
 	/* Fix TRX CRC - recalculate to cover only kernel partition so UBI
 	 * overlay writes don't invalidate it. Safe to run every boot since
@@ -10889,12 +10904,12 @@ static void sysinit(void)
 
 	start_hotplug2();
 
-#if !defined(TOMATO64_BCM53XX) && !defined(TOMATO64_MT3600BE)
+#ifndef TOMATO64_HAS_UBI_SYSUPGRADE
 	/* Mount filesystem rw */
 	if (!nvram_get_int("fs_mount_ro")) {
 		eval("mount", "-o", "remount,rw,noatime", "/");
 	}
-#endif /* !TOMATO64_BCM53XX && !TOMATO64_MT3600BE */
+#endif /* !TOMATO64_HAS_UBI_SYSUPGRADE */
 
 #ifdef TOMATO64_X86_64
 	if ((fp = fopen("/etc/fstab", "w"))) {
@@ -10928,6 +10943,9 @@ static void sysinit(void)
 #ifdef TOMATO64_MT3600BE
 	eval("set_devs_mt3600be");
 #endif /* TOMATO64_MT3600BE */
+#ifdef TOMATO64_BE12PRO
+	eval("set_devs_be12pro");
+#endif /* TOMATO64_BE12PRO */
 #ifdef TOMATO64_BE14000
 	eval("set_devs_be14000");
 #endif /* TOMATO64_BE14000 */
@@ -10984,12 +11002,12 @@ static void sysinit(void)
 	}
 	signal(SIGCHLD, handle_reap);
 
-#if defined(TOMATO64_MT3600BE) || defined(TOMATO64_BCM53XX)
+#ifdef TOMATO64_HAS_UBI_SYSUPGRADE
 	/* Sysupgrade re-exec hook (see handle_tomato64_reexec). SIGURG is
 	 * unused by rc and not in initsigs; SIGRTMIN would be silently
 	 * swallowed by musl (it reserves signals 32-34 internally). */
 	signal(SIGURG, handle_tomato64_reexec);
-#endif /* TOMATO64_MT3600BE || TOMATO64_BCM53XX */
+#endif /* TOMATO64_HAS_UBI_SYSUPGRADE */
 
 	/* ctf must be loaded prior to any other modules */
 	if (nvram_invmatch("ctf_disable", "1"))
@@ -11315,9 +11333,9 @@ int init_main(int argc, char *argv[])
 			 * last one as ssh telnet httpd samba etc can fail to load until start_wan_done
 			 */
 			start_wan();
-#if defined(TOMATO64_BCM53XX) || defined(TOMATO64_MT3600BE)
+#ifdef TOMATO64_HAS_UBI_SYSUPGRADE
 			eval("mount_root", "done");
-#endif /* TOMATO64_BCM53XX || TOMATO64_MT3600BE */
+#endif /* TOMATO64_HAS_UBI_SYSUPGRADE */
 
 #if !defined(TOMATO64) || defined(TOMATO64_BCM53XX)
 			if (wds_enable()) {

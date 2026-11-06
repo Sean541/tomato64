@@ -36,7 +36,10 @@
 #define WG_SCRIPT_START		0
 #define WG_SCRIPT_STOP		1
 /* uncomment to add default routing (also in patches/wireguard-tools/101-tomato-specific.patch line 412 - 414) after kernel fix */
+//#define KERNEL_WG_FIX
+#ifdef TOMATO64
 #define KERNEL_WG_FIX
+#endif /* TOMATO64 */
 
 
 /* interfaces that we want to ignore in standard PRB mode */
@@ -45,8 +48,8 @@ static const char *vpn_ifaces[] = { "wg0", "wg1", "wg2", "tun11", "tun12", "tun1
 /* structure for storing a dynamic array of domains */
 typedef struct {
 	char **domains;
-	int count;
-	int capacity;
+	size_t count;
+	size_t capacity;
 } domain_list_t;
 
 /* per-unit WG routing script context */
@@ -249,7 +252,7 @@ static int init_domain_list(domain_list_t *list)
 /* freeing up domain list memory */
 static void free_domain_list(domain_list_t *list)
 {
-	int i;
+	size_t i;
 
 	if (list->domains) {
 		for (i = 0; i < list->count; i++) {
@@ -269,7 +272,7 @@ static void free_domain_list(domain_list_t *list)
 static void add_domain(domain_list_t *list, const char *domain)
 {
 	char **newdomains;
-	int newcap;
+	size_t newcap, domain_len;
 
 	if (!domain || !*domain)
 		return;
@@ -280,26 +283,35 @@ static void add_domain(domain_list_t *list, const char *domain)
 
 	/* check if increase the array size is needed */
 	if (list->count >= list->capacity - 1) { /* -1 for NULL at the end */
+		if (list->capacity > ((size_t)-1 / sizeof(char *)) / 2) {
+			logmsg(LOG_ERR, "%s: domain list capacity overflow - skipping domain '%s'", __FUNCTION__, domain);
+			return;
+		}
+
 		newcap = list->capacity * 2;
-		newdomains = realloc(list->domains, newcap * sizeof(char*));
+		newdomains = realloc(list->domains, newcap * sizeof(char *));
 		if (!newdomains) {
-			logmsg(LOG_ERR, "%s: realloc failed (capacity=%d, domain='%s') - skipping domain (out of memory)", __FUNCTION__, newcap, domain);
+			logmsg(LOG_ERR, "%s: realloc failed (capacity=%zu, domain='%s') - skipping domain (out of memory)", __FUNCTION__, newcap, domain);
 			return;
 		}
 		list->domains = newdomains;
 		list->capacity = newcap;
-		logmsg(LOG_DEBUG, "%s: capacity increased to %d", __FUNCTION__, list->capacity);
+		logmsg(LOG_DEBUG, "%s: capacity increased to %zu", __FUNCTION__, list->capacity);
 	}
 
 	/* allocate memory for the new domain */
-	list->domains[list->count] = (char*)malloc((strlen(domain) + 1) * sizeof(char));
+	domain_len = strlen(domain);
+	if (domain_len == (size_t) - 1)
+		return;
+
+	list->domains[list->count] = malloc(domain_len + 1);
 	if (!list->domains[list->count]) {
 		logmsg(LOG_ERR, "%s: malloc failed for domain '%s' (out of memory) - skipping", __FUNCTION__, domain);
 		return;
 	}
 
 	/* copy domain */
-	strlcpy(list->domains[list->count], domain, strlen(domain) + 1);
+	strlcpy(list->domains[list->count], domain, domain_len + 1);
 	list->count++;
 
 	if (list->count < list->capacity)
@@ -564,6 +576,25 @@ static int replace_in_file(const char *filename, const char *old_str, const char
 	return 0;
 }
 
+static int wg_shellsafe_ipv4_list(const char *value)
+{
+	return value && (strspn(value, "0123456789., ") == strlen(value));
+}
+
+static int wg_shellsafe_route_value(const char *value, const int domain)
+{
+	const char *allowed;
+
+	if (!value || !*value)
+		return 0;
+
+	allowed = domain ?
+	          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-*" :
+	          "0123456789./-";
+
+	return strspn(value, allowed) == strlen(value);
+}
+
 static int wg_detect_routing_mode(const int unit, const int is_default_route)
 {
 	int rgwr;
@@ -671,6 +702,10 @@ static void wg_build_firewall(const int unit)
 		}
 
 		dns = getNVRAMVar("wg%d_dns", unit);
+		if (!wg_shellsafe_ipv4_list(dns)) {
+			logmsg(LOG_WARNING, "invalid wg%d DNS list, ignoring value", unit);
+			dns = "";
+		}
 		if (getNVRAMVar("wg%d_file", unit)[0] == '\0') { /* only if no optional config file has been added */
 			/* script to add/remove fw rules for dns servers (unit, dns) */
 			fprintf(fp, "\n# DNS\n"
@@ -768,6 +803,10 @@ static void wg_build_routing(const int unit, const char *fwmark_mask, const char
 		policy = atoi(type);
 		switch (policy) {
 		case 1: /* from source */
+			if (!wg_shellsafe_route_value(value, 0)) {
+				logmsg(LOG_WARNING, "invalid wg%d source routing value '%s', skipping", unit, value);
+				continue;
+			}
 			logmsg(LOG_INFO, "type: %d - add %s (wg%d)", policy, value, unit);
 			if (strstr(value, "-")) /* range */
 				fprintf(fp, "iptables -t mangle -A PREROUTING -m iprange --src-range %s -j MARK --set-mark %s\n", value, fwmark_mask);
@@ -777,11 +816,19 @@ static void wg_build_routing(const int unit, const char *fwmark_mask, const char
 			rules_count++;
 			break;
 		case 2: /* to destination */
+			if (!wg_shellsafe_route_value(value, 0) || strchr(value, '-')) {
+				logmsg(LOG_WARNING, "invalid wg%d destination routing value '%s', skipping", unit, value);
+				continue;
+			}
 			logmsg(LOG_INFO, "type: %d - add %s (wg%d)", policy, value, unit);
 			fprintf(fp, "iptables -t mangle -A PREROUTING -d %s -j MARK --set-mark %s\n", value, fwmark_mask);
 			rules_count++;
 			break;
 		case 3: /* to domain */
+			if (!wg_shellsafe_route_value(value, 1)) {
+				logmsg(LOG_WARNING, "invalid wg%d routing domain '%s', skipping", unit, value);
+				continue;
+			}
 			logmsg(LOG_INFO, "type: %d - add %s (wg%d)", policy, value, unit);
 			add_domain(&my_domains, value);
 			restart_dnsmasq = 1;
@@ -810,11 +857,77 @@ static void wg_build_routing(const int unit, const char *fwmark_mask, const char
 	restart_fw = 1;
 }
 
+/*
+ * wg-quick treats these four configuration keys as shell snippets and
+ * executes them as root. External configuration files are data inputs here,
+ * so do not allow them to cross that command-execution boundary.
+ *
+ * Return 1 when an executable hook is present, 0 when none is present,
+ * and -1 when the file cannot be inspected.
+ */
+static int wg_config_has_exec_hooks(const char *file)
+{
+	FILE *fp;
+	char line[MAX_LINE];
+	char *p, *eq, *end;
+	size_t key_len;
+	static const char *hooks[] = { "PreUp", "PostUp", "PreDown", "PostDown", NULL };
+	int i;
+
+	if ((fp = fopen(file, "r")) == NULL)
+		return -1;
+
+	while (fgets(line, sizeof(line), fp) != NULL) {
+		p = line;
+		while (isspace((unsigned char)*p))
+			p++;
+
+		if ((*p == '\0') || (*p == '#'))
+			continue;
+
+		eq = strchr(p, '=');
+		if (eq == NULL)
+			continue;
+
+		end = eq;
+		while ((end > p) && isspace((unsigned char)end[-1]))
+			end--;
+
+		key_len = (size_t)(end - p);
+		for (i = 0; hooks[i] != NULL; i++) {
+			if ((strlen(hooks[i]) == key_len) && (strncasecmp(p, hooks[i], key_len) == 0)) {
+				fclose(fp);
+				return 1;
+			}
+		}
+	}
+
+	if (ferror(fp)) {
+		fclose(fp);
+		return -1;
+	}
+
+	fclose(fp);
+	return 0;
+}
+
 static int wg_quick_iface(char *iface, const char *file, const int up)
 {
+	int hook_check;
 	char buffer[BUF_SIZE_32];
 	char *up_down = (up == 1 ? "up" : "down");
 	FILE *fp;
+
+	/* Reject external configs that would make wg-quick execute shell code. */
+	hook_check = wg_config_has_exec_hooks(file);
+	if (hook_check < 0) {
+		logmsg(LOG_ERR, "unable to inspect wireguard configuration file %s!", file);
+		return -1;
+	}
+	if (hook_check > 0) {
+		logmsg(LOG_ERR, "refusing wireguard configuration file %s: executable wg-quick hooks are not allowed", file);
+		return -1;
+	}
 
 	/* copy config to wg dir with proper name */
 	snprintf(buffer, BUF_SIZE_32, WG_DIR"/%s.conf", iface);
@@ -847,13 +960,22 @@ static int wg_quick_iface(char *iface, const char *file, const int up)
 static void wg_set_port(const int unit)
 {
 	wg_script_ctx_t *ctx = &wg_script_ctx[unit];
-	char *b;
+	char *b, *end;
+	long port;
 
 	b = getNVRAMVar("wg%d_port", unit);
-	if (b[0] == '\0')
-		snprintf(ctx->port, sizeof(ctx->port), "%d", 51820 + unit);
-	else
-		snprintf(ctx->port, sizeof(ctx->port), "%s", b);
+	if (b[0] != '\0') {
+		port = strtol(b, &end, 10);
+
+		if ((*end == '\0') && (port >= 1) && (port <= 65535)) {
+			snprintf(ctx->port, sizeof(ctx->port), "%ld", port);
+			return;
+		}
+
+		logmsg(LOG_WARNING, "invalid wg%d port '%s', using default", unit, b);
+	}
+
+	snprintf(ctx->port, sizeof(ctx->port), "%d", 51820 + unit);
 }
 
 static void wg_set_fwmark(const int unit)
@@ -867,10 +989,14 @@ static void wg_set_fwmark(const int unit)
 
 	b = getNVRAMVar("wg%d_fwmark", unit);
 	/* fwmark=0 disables mark in WG */
-	if ((b[0] == '\0') || (b[0] == '0'))
+	if ((b[0] == '\0') || (strcmp(b, "0") == 0))
 		snprintf(ctx->fwmark, sizeof(ctx->fwmark), "%s", ctx->port);
-	else
+	else if ((strlen(b) == 8) && (strspn(b, "0123456789abcdefABCDEF") == 8))
 		snprintf(ctx->fwmark, sizeof(ctx->fwmark), "%s", b);
+	else {
+		logmsg(LOG_WARNING, "invalid wg%d fwmark '%s', using interface port", unit, b);
+		snprintf(ctx->fwmark, sizeof(ctx->fwmark), "%s", ctx->port);
+	}
 }
 
 static int wg_if_exist(const char *ifname)
@@ -917,6 +1043,14 @@ static void wg_setup_watchdog(const int unit)
 
 		val = getNVRAMVar("wg%d_tunchk", unit);
 		ipchk = (val && *val) ? val : nvram_safe_get("wan_checker");
+		{
+			struct in_addr addr;
+
+			if (inet_pton(AF_INET, ipchk, &addr) != 1) {
+				logmsg(LOG_WARNING, "%s: invalid tunnel check address '%s', using 1.0.0.1", __FUNCTION__, ipchk ? ipchk : "");
+				ipchk = "1.0.0.1";
+			}
+		}
 
 		if ((fp = fopen(buffer, "w"))) {
 			fprintf(fp, "#!/bin/sh\n"
@@ -1039,20 +1173,15 @@ static int wg_set_iface_fwmark(const int unit, char *iface)
 
 static int wg_set_iface_privkey(char *iface, const char *privkey)
 {
-	FILE *fp;
 	char buffer[BUF_SIZE];
 
 	/* write private key to file */
 	snprintf(buffer, BUF_SIZE, WG_KEYS_DIR"/%s", iface);
 
-	if (!(fp = fopen(buffer, "w"))) {
-		logmsg(LOG_ERR, "cannot open file for writing: %s (%s)", buffer, strerror(errno));
+	if (f_write_string(buffer, privkey, FW_CREATE, 0600) < 0) {
+		logmsg(LOG_ERR, "cannot write file: %s (%s)", buffer, strerror(errno));
 		return -1;
 	}
-	fprintf(fp, "%s", privkey);
-	fclose(fp);
-
-	chmod(buffer, (S_IRUSR | S_IWUSR));
 
 	/* set interface private key */
 	if (eval("wg", "set", iface, "private-key", buffer)) {
@@ -1164,18 +1293,15 @@ static void wg_iface_post_down(const int unit)
 
 static void wg_set_peer_psk(char *iface, char *pubkey, const char *presharedkey)
 {
-	FILE *fp;
 	char buffer[BUF_SIZE];
 
 	/* write preshared key to file */
 	snprintf(buffer, BUF_SIZE, WG_KEYS_DIR"/%s.psk", iface);
 
-	if (!(fp = fopen(buffer, "w"))) {
-		logmsg(LOG_ERR, "cannot open file for writing: %s (%s)", buffer, strerror(errno));
+	if (f_write_string(buffer, presharedkey, FW_CREATE, 0600) < 0) {
+		logmsg(LOG_ERR, "cannot write file: %s (%s)", buffer, strerror(errno));
 		return;
 	}
-	fprintf(fp, "%s", presharedkey);
-	fclose(fp);
 
 	if (eval("wg", "set", iface, "peer", pubkey, "preshared-key", buffer)) {
 		logmsg(LOG_WARNING, "command failed: wg set %s peer %s preshared-key xxx", iface, pubkey);
@@ -1420,9 +1546,37 @@ static void wg_process_routes(const int unit, FILE *fp, const char *iface, int s
 		cb(unit, iface, route);
 }
 
+/*
+ * Temporary host routes are not part of the VPN policy snapshot.
+ * Match both symbolic and numeric protocol values: rt_protos might not
+ * have been initialized when "ip route show" runs.
+ */
+static int wg_is_temporary_route(const char *route)
+{
+	const char *p = route;
+
+	while ((p = strstr(p, "proto ")) != NULL) {
+		const char *value = p + 6;
+		size_t len = strcspn(value, " \t");
+
+		if (((len == 3) && (strncmp(value, "mdu", len) == 0)) ||
+		    ((len == 2) && (strncmp(value, "98", len) == 0)) ||
+		    ((len == 10) && (strncmp(value, "mwwatchdog", len) == 0)) ||
+		    ((len == 2) && (strncmp(value, "99", len) == 0)))
+			return 1;
+
+		p = value + len;
+	}
+
+	return 0;
+}
+
 static void wg_add_strict_route(const int unit, const char *iface, const char *route)
 {
 	wg_script_ctx_t *ctx = &wg_script_ctx[unit];
+
+	if (wg_is_temporary_route(route))
+		return;
 
 	/*
 	 * Do NOT append "dev iface" here.
@@ -1437,7 +1591,7 @@ static void wg_add_policy_route(const int unit, const char *iface, const char *r
 	unsigned int i, n_ifaces;
 
 	/* skip default and other unneeded routes */
-	if ((strncmp(route, "default ", 8) == 0) || (strncmp(route, "0.0.0.0/1 ", 10) == 0) || (strncmp(route, "128.0.0.0/1 ", 12) == 0) || (strstr(route, "proto mwwatchdog")))
+	if ((strncmp(route, "default ", 8) == 0) || (strncmp(route, "0.0.0.0/1 ", 10) == 0) || (strncmp(route, "128.0.0.0/1 ", 12) == 0) || wg_is_temporary_route(route))
 		return;
 
 	/* skip vpn ifaces */

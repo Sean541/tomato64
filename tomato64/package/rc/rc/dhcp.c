@@ -242,7 +242,7 @@ static int bound(char *ifname, int renew, char *prefix)
 		case WP_PPPOE:
 			logmsg(LOG_DEBUG, "*** %s: start_pppoe(%s) ...", __FUNCTION__, prefix);
 			for (i = 1; i <= MWAN_MAX; i++) {
-				get_wan_prefix(i, tmp);
+				get_wan_prefix(i, tmp, sizeof(tmp));
 				if (!strcmp(prefix, tmp)) {
 					start_pppoe(PPPOEWAN(i), prefix);
 					break; /* found prefix - break */
@@ -344,7 +344,7 @@ int dhcpc_event_main(int argc, char **argv)
 	strlcpy(prefix, "wan", sizeof(prefix)); /* default */
 
 	for (i = 1; i <= MWAN_MAX; i++) {
-		get_wan_prefix(i, name);
+		get_wan_prefix(i, name, sizeof(name));
 		snprintf(tmp, sizeof(tmp), "%s_ifname", name);
 		if (nvram_match(tmp, ifname)) {
 			strlcpy(prefix, name, sizeof(prefix));
@@ -458,17 +458,16 @@ static void restart_ntpd(void) {
 static int expires_lan(unsigned int in)
 {
 	time_t now;
-	FILE *fp;
 	char tmp[64];
+	char value[16];
 
 	time(&now);
 	snprintf(tmp, sizeof(tmp), "/tmp/dhcpc-lan.expires");
-	if (!(fp = fopen(tmp, "w"))) {
+	snprintf(value, sizeof(value), "%u", (unsigned int) now + in);
+	if (f_write_string(tmp, value, 0, 0644) < 0) {
 		logerr(__FUNCTION__, __LINE__, tmp);
 		return 1;
 	}
-	fprintf(fp, "%d", (unsigned int) now + in);
-	fclose(fp);
 
 	return 0;
 }

@@ -2592,20 +2592,20 @@ function myName() {
 
 function navi() {
 	var menu = [
-		['Status', 			'status', 0, [
+		['<span class="arrow">›</span> Status', 			'status', 0, [
 			['Overview',			'overview.asp'],
 			['Device List',			'devices.asp'],
 			['Web Usage',			'webmon.asp'],
 			['Logs',			'log.asp'],
 		]],
-		['Bandwidth', 			'bwm', 0, [
+		['<span class="arrow">›</span> Bandwidth', 			'bwm', 0, [
 			['Real-Time',			'realtime.asp'],
 			['Last 24 Hours',		'24.asp'],
 			['Daily',			'daily.asp'],
 			['Weekly',			'weekly.asp'],
 			['Monthly',			'monthly.asp'],
 		]],
-		['IP Traffic',			'ipt', 0, [
+		['<span class="arrow">›</span> IP Traffic',			'ipt', 0, [
 			['Real-Time',			'realtime.asp'],
 			['Last 24 Hours',		'24.asp'],
 			['View Graphs',			'graphs.asp'],
@@ -2613,7 +2613,7 @@ function navi() {
 			['Daily',			'daily.asp'],
 			['Monthly',			'monthly.asp'],
 		]],
-		['Tools', 			'tools', 0, [
+		['<span class="arrow">›</span> Tools', 			'tools', 0, [
 			['Ping',			'ping.asp'],
 			['Traceroute',			'trace.asp'],
 			['System Commands',		'shell.asp'],
@@ -2629,7 +2629,7 @@ function navi() {
 			['Wake on LAN',			'wol.asp'],
 		]],
 		null,
-		['Basic', 			'basic', 0, [
+		['<span class="arrow">›</span> Basic', 			'basic', 0, [
 			['Network',			'network.asp'],
 /* TOMATO64-WIFI-BEGIN */
 			['Wireless',			'wireless.asp'],
@@ -2645,7 +2645,7 @@ function navi() {
 			['Wireless Filter',		'wfilter.asp'],
 /* BCM53XX-END */
 		]],
-		['Advanced', 			'advanced', 0, [
+		['<span class="arrow">›</span> Advanced', 			'advanced', 0, [
 			['Conntrack/Netfilter',		'ctnf.asp'],
 			['DHCP/DNS/TFTP',		'dhcpdns.asp'],
 			['Firewall',			'firewall.asp'],
@@ -2668,7 +2668,7 @@ function navi() {
 			['Wireless',			'wireless.asp'],
 /* BCM53XX-END */
 		]],
-		['Port Forwarding', 		'forward', 0, [
+		['<span class="arrow">›</span> Port Forwarding', 		'forward', 0, [
 			['Basic',			'basic.asp'],
 /* IPV6-BEGIN */
 			['Basic IPv6',			'basic-ipv6.asp'],
@@ -2677,7 +2677,7 @@ function navi() {
 			['Triggered',			'triggered.asp'],
 			['UPnP IGD & PCP',		'upnp.asp'],
 		]],
-		['QoS',				'qos', 0, [
+		['<span class="arrow">›</span> QoS',				'qos', 0, [
 			['Basic Settings',		'settings.asp'],
 			['Classification',		'classify.asp'],
 			['View Graphs',			'graphs.asp'],
@@ -2685,12 +2685,12 @@ function navi() {
 			['Transfer Rates',		'ctrate.asp'],
 		]],
 /* QUOTAS-BEGIN */
-		['Quotas',			'quota', 0, [
+		['<span class="arrow">›</span> Quotas',			'quota', 0, [
 			['Settings',			'settings.asp'],
 			['Usage',			'usage.asp'],
 		]],
 /* QUOTAS-END */
-		['Misc',			'misc', 0, [
+		['<span class="arrow">›</span> Misc',			'misc', 0, [
 			['Access Restriction',		'restrict.asp'],
 			['Bandwidth Limiter',		'bwlimit.asp'],
 /* NOCAT-BEGIN */
@@ -2699,13 +2699,13 @@ function navi() {
 		]],
 /* NGINX-BEGIN */
 		null,
-		['Web Server',			'web', 0, [
+		['<span class="arrow">›</span> Web Server',			'web', 0, [
 			['Nginx & PHP',			'nginx.asp'],
 			['MySQL Server',		'mysql.asp'],
 		]],
 /* NGINX-END */
 /* USB-BEGIN */
-		['USB and NAS',			'nas', 0, [
+		['<span class="arrow">›</span> USB and NAS',			'nas', 0, [
 			['USB Support',			'usb.asp'],
 /* NVME-BEGIN */
 			['NVMe', 			'nvme.asp'],
@@ -2728,7 +2728,7 @@ function navi() {
 		]],
 /* USB-END */
 /* VPN-BEGIN */
-		['VPN',					'vpn', 0, [
+		['<span class="arrow">›</span> VPN',					'vpn', 0, [
 /* OPENVPN-BEGIN */
 			['OpenVPN Server',		'server.asp'],
 			['OpenVPN Client',		'client.asp'],
@@ -2747,7 +2747,7 @@ function navi() {
 		]],
 /* VPN-END */
 		null,
-		['Administration',		'admin', 0, [
+		['<span class="arrow">›</span> Administration',		'admin', 0, [
 			['Admin Access',		'access.asp'],
 			['TomatoAnon',			'tomatoanon.asp'],
 			['Bandwidth Monitoring',	'bwm.asp'],
@@ -2876,6 +2876,8 @@ function navi() {
 		}
 	}
 	W(buf.join(''));
+	
+	for (var i=0;i<menu.length;i++){var e=E('menu_'+i);if(e&&e.style.display==='block'){var a=e.previousElementSibling;if(a)a.classList.add('open');}}
 
 	if (base.length) {
 		if ((base == 'qos') && (name == 'detailed.asp')) name = 'view.asp';
@@ -2886,7 +2888,9 @@ function navi() {
 function toggleMenu(id) {
 	var submenu = E('menu_'+id);
 	if (submenu) {
-		submenu.style.display = submenu.style.display === 'block' ? 'none' : 'block';
+		var open = submenu.style.display !== 'block';
+		submenu.style.display = open ? 'block' : 'none';
+		var a = submenu.previousElementSibling; if (a) a.classList.toggle('open', open);
 
 		var links = submenu.getElementsByTagName('a');
 		for (var k = 0; k < links.length; k++) {
@@ -3123,6 +3127,7 @@ function spinOUI(x, which) {
 
 function searchOUI(n, i) {
 	if (xoboui) return;
+	if (!/^[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){2}$/.test(n)) return;
 
 	spinOUI(1, 'gW_'+i);
 
@@ -3197,12 +3202,12 @@ function anon_update() {
 
 	/* special case */
 	if (page == 'status-overview.asp') {
-		res = '<div class="section-title">!! Attention !!</div><div class="section-centered">New version of Tomato64 <b>'+update+'</b> is now available. <a href="https://tomato64.org/" target="_blank">Click here to download</a>.</div>';
+		res = '<div class="section-title">!! Attention !!</div><div class="section-centered">New version of Tomato64 <b>'+escapeHTML(''+update)+'</b> is now available. <a href="https://tomato64.org/" target="_blank">Click here to download</a>.</div>';
 		E('status-nversion').innerHTML = res;
 		E('status-nversion').style.display = 'block';
 	}
 	else {
-		res = 'New version ('+update+') available <a href="https://tomato64.org/"><b>HERE</b></a>!';
+		res = 'New version ('+escapeHTML(''+update)+') available <a href="https://tomato64.org/"><b>HERE</b></a>!';
 		W(res);
 	}
 }
@@ -3218,7 +3223,8 @@ function calcWanPortCount() {
 		var u = (uidx > 1) ? uidx : '';
 		var proto = nvram['wan'+u+'_proto'];
 
-		if ((proto != 'disabled')
+		/* A missing NVRAM property must not be treated as an enabled WAN. */
+		if (proto && (proto != 'disabled')
 /* USB-BEGIN */
 		    && (proto != 'lte') && (proto != 'ppp3g')
 /* USB-END */
@@ -3233,11 +3239,44 @@ function ethDescClean(s) {
 	return (s || '').replace(/[%\r\n]/g, '').substring(0, 8);
 }
 
+function mappedWanDescription(i) {
+	var idx = parseInt(i, 10);
+	if (!isFinite(idx))
+		return null;
+
+	/* null/undefined means the backend could not provide a complete map.
+	 * An empty object is valid and means there are no active wired WANs.
+	 */
+	if ((typeof(etherwans) == 'undefined') || (etherwans === null))
+		return null;
+
+	var label = etherwans['port'+idx];
+	return (typeof(label) == 'string') ? label : '';
+}
+
 function portDescription(i) {
 	var idx = parseInt(i, 10);
 	if (!isFinite(idx))
 		return i;
 
+	var mapped = mappedWanDescription(idx);
+	if (mapped !== null) {
+		if (mapped.length)
+			return mapped;
+
+		/*
+		 * Preserve the established physical LAN numbering. The dedicated
+		 * primary Ethernet WAN occupies display slot 0 when WAN0 is wired;
+		 * secondary WANs merely replace the label of whichever LAN jack is
+		 * actually assigned to them, without renumbering the other LANs.
+		 */
+		var primary = mappedWanDescription(0) || '';
+		var primaryWired = /(^|\/)WAN0(\/|$)/.test(primary);
+
+		return 'LAN'+(primaryWired ? ((idx < 5) ? (idx - 1) : '4-7') : ((idx < 5) ? idx : '5-8'));
+	}
+
+	/* Legacy fallback for old/incomplete backend data. */
 	var wanCount = calcWanPortCount();
 
 	if (idx < wanCount)
@@ -3268,6 +3307,10 @@ function portCaption(i, shorten) {
 
 	if (!shorten)
 		return orig;
+
+	/* Multiple tagged WANs may legitimately share one physical trunk. */
+	if (orig && (String(orig).indexOf('WAN') == 0))
+		return String(orig).replace(/WAN/g, 'W');
 
 	/* Keep captions compact for small VLAN header icons:
 	 * "LAN0" -> "L0", "WAN1" -> "W1", "LAN4-7" -> "L7".
@@ -3469,6 +3512,24 @@ var PortNames = {
 			};
 			/* VLAN labels same as hardware labels for this device */
 			this._vlanLabels = this._hardwareLabels;
+		}
+		else if (model === 'Tenda BE12 Pro') {
+			/* Labels as silkscreened: port 1 is the 2.5G WAN, port 2 the
+			 * SoC's 2.5G LAN, ports 3-5 the AN8855 1G LANs */
+			this._hardwareLabels = {
+				0: '1/2.5GE',
+				1: '2/2.5GE',
+				2: '3',
+				3: '4',
+				4: '5'
+			};
+			this._vlanLabels = {
+				0: '1',
+				1: '2',
+				2: '3',
+				3: '4',
+				4: '5'
+			};
 		}
 		else if (model === 'GL.iNet GL-BE14000') {
 			this._hardwareLabels = {

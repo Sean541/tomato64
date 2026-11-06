@@ -14,7 +14,7 @@
 #include <sys/types.h>
 
 
-typedef char *(*utf16_conv)(const uint16_t u, char *b);
+typedef char *(*utf16_conv)(const uint16_t u, char *b, size_t rem);
 
 /* Returns the amount of 16-bit elements in UTF-16LE needed
  * (without the terminating null) to store given UTF-8 string
@@ -160,30 +160,50 @@ fail:
 }
 #endif /* 0 */
 
-static inline char *js_utf16_char(const uint16_t u, char *b)
+static inline char *js_utf16_char(const uint16_t u, char *b, size_t rem)
 {
 	unsigned char c = (unsigned char)u;
+	int n;
 
 	if (u <= 0xFF) {
-		if ((c == '"') || (c == '\'') || (c == '\\') || (!isprint(c)))
-			b += sprintf(b, "\\x%02x", c);
-		else
+		if ((c == '"') || (c == '\'') || (c == '\\') || (!isprint(c))) {
+			n = snprintf(b, rem, "\\x%02x", c);
+			if ((n < 0) || ((size_t)n >= rem))
+				return NULL;
+			b += n;
+		}
+		else {
+			if (rem < 2)
+				return NULL;
 			*b++ = c;
+		}
 	}
-	else
-		b += sprintf(b, "\\u%04x", u);
+	else {
+		n = snprintf(b, rem, "\\u%04x", u);
+		if ((n < 0) || ((size_t)n >= rem))
+			return NULL;
+		b += n;
+	}
 
 	return b;
 }
 
-static inline char *html_utf16_char(const uint16_t u, char *b)
+static inline char *html_utf16_char(const uint16_t u, char *b, size_t rem)
 {
 	unsigned char c = (unsigned char)u;
+	int n;
 
-	if ((u > 0xFF) || (c == '&') || (c == '<') || (c == '>') || (c == '"') || (c == '\'') || (!isprint(c)))
-		b += sprintf(b, "&#%d;", u);
-	else
+	if ((u > 0xFF) || (c == '&') || (c == '<') || (c == '>') || (c == '"') || (c == '\'') || (!isprint(c))) {
+		n = snprintf(b, rem, "&#%u;", (unsigned int)u);
+		if ((n < 0) || ((size_t)n >= rem))
+			return NULL;
+		b += n;
+	}
+	else {
+		if (rem < 2)
+			return NULL;
 		*b++ = c;
+	}
 
 	return b;
 }
@@ -193,13 +213,18 @@ static char *utf8_to_string(const char *ins, int csize, utf16_conv conv)
 	const char *t = ins;
 	uint32_t wc;
 	char *outpos, *outs = NULL;
+	size_t out_size;
 	int shorts, m;
 
 	shorts = utf8_to_utf16_size(ins);
-	if (shorts <= 0)
+	if ((shorts <= 0) || (csize <= 0))
 		return NULL;
 
-	outpos = outs = malloc((shorts + 1) * csize + 1);
+	if ((size_t)shorts > (((size_t)-1 - 1) / (size_t)csize) - 1)
+		return NULL;
+
+	out_size = ((size_t)shorts + 1) * (size_t)csize + 1;
+	outpos = outs = malloc(out_size);
 	if (!outs)
 		return NULL;
 
@@ -215,18 +240,28 @@ static char *utf8_to_string(const char *ins, int csize, utf16_conv conv)
 		}
 
 		if (wc < 0x10000) {
-			outpos = conv((uint16_t)wc, outpos);
+			outpos = conv((uint16_t)wc, outpos, out_size - (size_t)(outpos - outs));
+			if (!outpos)
+				goto conv_fail;
 		}
 		else {
 			wc -= 0x10000;
-			outpos = conv((uint16_t)((wc >> 10) + 0xd800), outpos);
-			outpos = conv((uint16_t)((wc & 0x3ff) + 0xdc00), outpos);
+			outpos = conv((uint16_t)((wc >> 10) + 0xd800), outpos, out_size - (size_t)(outpos - outs));
+			if (!outpos)
+				goto conv_fail;
+			outpos = conv((uint16_t)((wc & 0x3ff) + 0xdc00), outpos, out_size - (size_t)(outpos - outs));
+			if (!outpos)
+				goto conv_fail;
 		}
 		t += m;
 	}
 
 	*outpos = '\0';
 	return outs;
+
+conv_fail:
+	free(outs);
+	return NULL;
 }
 
 char *utf8_to_js_string(const char *ins)

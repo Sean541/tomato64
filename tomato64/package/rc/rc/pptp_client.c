@@ -26,6 +26,13 @@
 #define LOGMSG_DISABLE	DISABLE_SYSLOG_OSM
 #define LOGMSG_NVDEBUG	"pptpc_debug"
 
+static void pptpc_write_pppd_quoted(FILE *fp, const char *option, const char *value)
+{
+	fprintf(fp, "%s ", option);
+	f_write_quoted(fp, value, FWQUOTE_SPACE_CRLF);
+	fputc('\n', fp);
+}
+
 
 void start_pptpc(void)
 {
@@ -94,6 +101,11 @@ void start_pptpc(void)
 
 	/* Generate ppp options */
 	if ((fd = fopen(PPTPC_OPTIONS, "w")) != NULL) {
+		if (fchmod(fileno(fd), 0600) != 0) {
+			logerr(__FUNCTION__, __LINE__, PPTPC_OPTIONS);
+			fclose(fd);
+			return;
+		}
 		ok = 1;
 		fprintf(fd, "lock\n"
 		            "noauth\n"
@@ -136,13 +148,13 @@ void start_pptpc(void)
 		if ((p = nvram_get("pptpc_username")) == NULL)
 			ok = 0;
 		else
-			fprintf(fd, "user \"%s\"\n", p);
+			pptpc_write_pppd_quoted(fd, "user", p);
 
 		/* Password */
 		if ((p = nvram_get("pptpc_passwd")) == NULL)
 			ok = 0;
 		else
-			fprintf(fd, "password \"%s\"\n", p);
+			pptpc_write_pppd_quoted(fd, "password", p);
 
 		/* Encryption */
 		/*  0 - Auto, 1 - None,  2 - Maximum (128 bit only), 3 - Required (128 or 40 bit) */
@@ -323,7 +335,7 @@ static void pptpc_del_route(void)
 		/* or via last primary wan */
 		else {
 			num = nvram_get_int("wan_primary");
-			get_wan_prefix(num, pmw);
+			get_wan_prefix(num, pmw, sizeof(pmw));
 			wan_ipaddr = (char *)get_wanip(pmw);
 			wan_gw = wan_gateway(pmw);
 			memcpy(&wanfaces, get_wanfaces(pmw), sizeof(wanfaces));
@@ -401,7 +413,7 @@ static void pptpc_add_table(void)
 
 	/* all active WANX in PPTP table ? FIXME! check iface / ifname / gw for various WAN types */
 	for (wanid = 1; wanid <= mwan_num; ++wanid) {
-		get_wan_prefix(wanid, sPrefix);
+		get_wan_prefix(wanid, sPrefix, sizeof(sPrefix));
 		if (check_wanup(sPrefix)) {
 			proto = get_wanx_proto(sPrefix);
 			if (proto == WP_DHCP || proto == WP_LTE || proto == WP_STATIC) {
@@ -432,7 +444,7 @@ static void pptpc_add_table(void)
 	eval("ip", "route", "append", pptpc_gateway, "dev", pptpc_iface, "proto", "kernel", "scope", "link", "src", pptpc_ipaddr);
 
 	for (wanid = 1; wanid <= mwan_num; ++wanid) {
-		get_wan_prefix(wanid, sPrefix);
+		get_wan_prefix(wanid, sPrefix, sizeof(sPrefix));
 		if (check_wanup(sPrefix)) {
 			snprintf(buffer, BUF_SIZE_128, "%d", wanid);
 			eval("ip", "route", "append", pptpc_gateway, "dev", pptpc_iface, "proto", "kernel", "scope", "link", "src", pptpc_ipaddr, "table", buffer);
@@ -459,7 +471,7 @@ static void pptpc_add_table(void)
 		eval("ip", "route", "append", remote_cidr, "via", pptpc_ipaddr, "dev", pptpc_iface, "scope", "link", "table", "main");
 		/* add PPTP network to all WANX tables */
 		for (wanid = 1; wanid <= mwan_num; ++wanid) {
-			get_wan_prefix(wanid, sPrefix);
+			get_wan_prefix(wanid, sPrefix, sizeof(sPrefix));
 			if (check_wanup(sPrefix)) {
 				snprintf(buffer, BUF_SIZE_128, "%d", wanid);
 				eval("ip", "route", "append", remote_cidr, "via", pptpc_ipaddr, "dev", pptpc_iface, "scope", "link", "table", buffer);

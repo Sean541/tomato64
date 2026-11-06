@@ -82,12 +82,14 @@ int is_no_partition(const char *discname)
 
 	if ((procpt = fopen("/proc/partitions", "r"))) {
 		while (fgets(line, sizeof(line), procpt)) {
-			if (sscanf(line, " %d %d %d %[^\n ]", &ma, &mi, &sz, ptname) != 4)
+			if (sscanf(line, " %d %d %d %31[^\n ]", &ma, &mi, &sz, ptname) != 4)
 				continue;
 
 			if (strstr(ptname, discname))
 				count++;
 		}
+
+		fclose(procpt);
 	}
 
 	return (count == 1);
@@ -154,13 +156,13 @@ int exec_for_host(int host, int obsolete, uint flags, host_exec func)
 		}
 		if (host >= 0 && host != host_no)
 			continue;
-		snprintf(dsname, sizeof(dsname), dp->d_name);
+		snprintf(dsname, sizeof(dsname), "%s", dp->d_name);
 		siz = strlen(dsname);
 		flags |= EFH_1ST_DISC;
 		if (!(prt_fp = fopen("/proc/partitions", "r")))
 			continue;
 		while (fgets(line, sizeof(line) - 2, prt_fp)) {
-			if (sscanf(line, " %*s %*s %*s %s", ptname) != 1)
+			if (sscanf(line, " %*s %*s %*s %31s", ptname) != 1)
 				continue;
 
 			if (!strncmp(ptname, dsname, siz)) {

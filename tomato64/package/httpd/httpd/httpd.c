@@ -76,6 +76,7 @@
 #endif /* TOMATO64 */
 #include <netinet/tcp.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #ifdef TOMATO64
 #include <limits.h>
 #endif /* TOMATO64 */
@@ -119,10 +120,13 @@
 #define USER_DEFAULT		"root"
 #define PASS_DEFAULT		"admin"
 
-#define LOGIN_STAMP_PREFIX	"/tmp/httpd/httpd-gui-login-"
-#define LOGIN_LOCK_PATH		"/tmp/httpd/httpd-gui-login.lock"
+#define LOGIN_STAMP_DIR		"/tmp/httpd"
+#define LOGIN_STAMP_NAME	"httpd-gui-login-"
+#define LOGIN_STAMP_PREFIX	LOGIN_STAMP_DIR "/" LOGIN_STAMP_NAME
+#define LOGIN_LOCK_PATH		LOGIN_STAMP_DIR "/httpd-gui-login.lock"
 #define LOGIN_COOKIE_NAME	"tomato_gui_session"
 #define LOGIN_COOKIE_LEN	16
+#define LOGIN_MARKER_MAX_AGE	(24 * 60 * 60)
 
 #define DO_FILE_MAX_BYTES	(10UL * 1024UL * 1024UL)
 #define CFE_MTD_PATH		"/dev/mtd0ro"
@@ -570,6 +574,75 @@ static int login_marker_valid(void)
 	return 1;
 }
 
+/*
+ * Marker files only suppress duplicate "login successful" messages; they
+ * are not an authorization boundary. Browser session cookies disappear
+ * without an explicit GUI logout, so their zero-length marker files can
+ * otherwise accumulate for the entire router uptime.
+ *
+ * Caller holds LOGIN_LOCK_PATH while this runs.
+ */
+static int login_marker_name_ok(const char *name)
+{
+	const char *p;
+	size_t prefix_len;
+	size_t hash_len;
+
+	if (name == NULL)
+		return 0;
+
+	prefix_len = strlen(LOGIN_STAMP_NAME);
+	if (strncmp(name, LOGIN_STAMP_NAME, prefix_len) != 0)
+		return 0;
+
+	p = name + prefix_len;
+	hash_len = 0;
+	while (login_cookie_char(p[hash_len]))
+		hash_len++;
+
+	if ((hash_len < 8) || (hash_len > (sizeof(unsigned long) * 2)))
+		return 0;
+
+	return (p[hash_len] == '\0');
+}
+
+static void login_marker_gc(void)
+{
+	DIR *dir;
+	struct dirent *de;
+	struct stat st;
+	char path[96];
+	time_t now;
+	int n;
+
+	now = time(NULL);
+	if (now == (time_t)-1)
+		return;
+
+	dir = opendir(LOGIN_STAMP_DIR);
+	if (dir == NULL)
+		return;
+
+	while ((de = readdir(dir)) != NULL) {
+		if (!login_marker_name_ok(de->d_name))
+			continue;
+
+		n = snprintf(path, sizeof(path), "%s/%s", LOGIN_STAMP_DIR, de->d_name);
+		if ((n < 0) || ((size_t)n >= sizeof(path)))
+			continue;
+
+		if ((lstat(path, &st) != 0) || (!S_ISREG(st.st_mode)))
+			continue;
+
+		if ((now >= st.st_mtime) &&
+		    ((unsigned long)(now - st.st_mtime) >= LOGIN_MARKER_MAX_AGE))
+			unlink(path);
+	}
+
+	closedir(dir);
+}
+
+
 static void login_session_remove(void)
 {
 	char path[96];
@@ -603,6 +676,12 @@ static void login_success_log_once(void)
 		return;
 
 	if (!login_marker_valid()) {
+		/*
+		 * New marker creation is the natural GC trigger: no directory scan
+		 * is added to ordinary requests from an already-known GUI session.
+		 */
+		login_marker_gc();
+
 		memset(token, 0, sizeof(token));
 		login_new_token(token, sizeof(token));
 
@@ -620,17 +699,25 @@ static auth_t auth_check(const char *authorization)
 	const char *u, *p;
 	char* pass;
 	int len;
+	size_t encoded_len;
 
 	/* basic authorization info? */
 	if ((!authorization) || (strncmp(authorization, "Basic ", 6) != 0))
 		return AUTH_NONE;
 
-	/* something's wrong */
-	if (base64_decoded_len(strlen(authorization + 6)) > sizeof(authinfo))
+	encoded_len = strlen(authorization + 6);
+
+	/*
+	 * base64_*() uses int lengths, and authinfo needs one byte left for
+	 * the terminating NUL appended below.
+	 */
+	if ((encoded_len > INT_MAX) || (base64_decoded_len((int)encoded_len) >= sizeof(authinfo)))
 		return AUTH_BAD;
 
 	/* decode it */
-	len = base64_decode(authorization + 6, (unsigned char *)authinfo, strlen(authorization) - 6);
+	len = base64_decode(authorization + 6, (unsigned char *)authinfo, (int)encoded_len);
+	if ((len < 0) || ((size_t)len >= sizeof(authinfo)))
+		return AUTH_BAD;
 	authinfo[len] = '\0';
 
 	/* split into user and password */
@@ -1094,13 +1181,28 @@ static void handle_request(void)
 			cur = cp + strlen(cp) + 1;
 		}
 		else if (strncasecmp(cur, "Content-Length:", 15) == 0) {
+			char *end;
+			unsigned long content_length;
+
 			cp = &cur[15];
 			cp += strspn(cp, " \t");
-			cl = strtoul(cp, NULL, 0);
-			if ((cl < 0) || (cl >= INT_MAX)) {
+
+			if ((*cp < '0') || (*cp > '9')) {
 				send_error(400, NULL, NULL);
 				return;
 			}
+
+			errno = 0;
+			content_length = strtoul(cp, &end, 10);
+			while ((*end == ' ') || (*end == '\t'))
+				end++;
+
+			if ((errno == ERANGE) || (content_length > INT_MAX) || ((*end != '\0') && (*end != '\r') && (*end != '\n'))) {
+				send_error(400, NULL, NULL);
+				return;
+			}
+
+			cl = (int)content_length;
 		}
 		else if ((strncasecmp(cur, "Content-Type:", 13) == 0) && ((cp = strstr(cur, "boundary=")))) {
 			boundary = &cp[9];
@@ -1335,7 +1437,11 @@ static void start_ssl(void)
 				logmsg(LOG_INFO, "generating SSL certificate...");
 
 				/* browsers seem to like this when the ip address moves... */
-				gen_urandom(t, NULL, sizeof(t), 0);
+				if (!gen_urandom(t, NULL, sizeof(t), 0)) {
+					logmsg(LOG_CRIT, "unable to read /dev/urandom for certificate generation");
+					file_unlock(lock);
+					return;
+				}
 				eval("gencert.sh", t);
 			}
 		}
@@ -1368,7 +1474,10 @@ static void init_id(void)
 	char s[128];
 
 	if (strncmp(nvram_safe_get("http_id"), "TID", 3) != 0) {
-		gen_urandom(s, NULL, sizeof(s), 1);
+		if (!gen_urandom(s, NULL, sizeof(s), 1)) {
+			logmsg(LOG_CRIT, "unable to initialize HTTP request token from /dev/urandom");
+			exit(1);
+		}
 		nvram_set("http_id", s);
 	}
 
@@ -1725,9 +1834,9 @@ int main(int argc, char **argv)
 				/* [addr:]port */
 				if ((port = strrchr(optarg, ':')) != NULL) {
 					if ((optarg[0] == '[') && (port > optarg) && (port[-1] == ']'))
-						memcpy(bind, optarg + 1, MIN(sizeof(bind), (unsigned int) (port - optarg) - 2));
+						memcpy(bind, optarg + 1, MIN(sizeof(bind) - 1, (unsigned int) (port - optarg) - 2));
 					else
-						memcpy(bind, optarg, MIN(sizeof(bind), (unsigned int) (port - optarg)));
+						memcpy(bind, optarg, MIN(sizeof(bind) - 1, (unsigned int) (port - optarg)));
 					port++;
 				}
 				else

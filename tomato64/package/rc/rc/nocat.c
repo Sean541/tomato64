@@ -25,6 +25,30 @@
 #define NOCAT_LOCKFILE		"/tmp/var/lock/splashd.lock"
 
 
+static int nocat_valid_nvram(void)
+{
+	static const char * const vars[] = {
+		"NC_AllowedWebHosts", "NC_DocumentRoot", "NC_ExcludePorts",
+		"NC_ForcedRedirect", "NC_GatewayMode", "NC_GatewayName",
+		"NC_GatewayPort", "NC_HomePage", "NC_IdleTimeout",
+		"NC_IncludePorts", "NC_LoginTimeout", "NC_MACWhiteList",
+		"NC_MaxMissedARP", "NC_Password", "NC_PeerChecktimeout",
+		"NC_RenewTimeout", "NC_SplashURL", "NC_SplashURLTimeout",
+		"NC_Verbosity", NULL
+	};
+	const char *value;
+	int i;
+
+	for (i = 0; vars[i]; i++) {
+		value = nvram_safe_get(vars[i]);
+		if (!str_is_single_line(value))
+			return 0;
+	}
+
+	return 1;
+}
+
+
 void build_nocat_conf(void)
 {
 	FILE *fp;
@@ -32,6 +56,11 @@ void build_nocat_conf(void)
 	char *lanX_ifname;
 	char *lanX_ipaddr;
 	int i;
+
+	if (!nocat_valid_nvram()) {
+		syslog(LOG_ERR, "NoCat: invalid configuration value contains a line break");
+		return;
+	}
 
 	if (!(fp = fopen(NOCAT_CONF, "w"))) {
 		logerr(__FUNCTION__, __LINE__, NOCAT_CONF);
@@ -146,7 +175,6 @@ void build_nocat_conf(void)
 
 void start_nocat(void)
 {
-	FILE *fp;
 	char splashfile[255];
 	char logofile[255];
 	char iconfile[255];
@@ -176,35 +204,27 @@ void start_nocat(void)
 		}
 	}
 
-	if (!(fp = fopen(NOCAT_START_SCRIPT, "w"))) {
+	if (f_write_string(NOCAT_START_SCRIPT,
+	                   "#!/bin/sh\n"
+	                   "LOGGER=\"logger -t splashd\"\n"
+	                   "LOCK_FILE="NOCAT_LOCKFILE"\n"
+	                   "if [ -f $LOCK_FILE ]; then\n"
+	                   " $LOGGER \"Captive Portal halted (0), other process starting\"\n"
+	                   " exit\n"
+	                   "fi\n"
+	                   "echo \"TOMATO64\" > $LOCK_FILE\n"
+	                   "sleep 20\n"
+	                   "[ -f "NOCAT_LEASES" ] || touch "NOCAT_LEASES"\n"
+	                   "$LOGGER \"Captive Portal Splash Daemon started\"\n"
+	                   "echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse\n"
+	                   "/usr/sbin/splashd >> "NOCAT_LOGFILE" 2>&1 &\n"
+	                   "sleep 2\n"
+	                   "echo 0 > /proc/sys/net/ipv4/tcp_tw_reuse\n"
+	                   "rm $LOCK_FILE\n",
+	                   FW_CREATE, 0700) < 0) {
 		logerr(__FUNCTION__, __LINE__, NOCAT_START_SCRIPT);
 		return;
 	}
-	
-	/*if (!pidof("splashd") > 0 && (fp = fopen(NOCAT_LOCKFILE, "r"))) {
-		unlink(NOCAT_LOCKFILE);
-	}*/
-
-	fprintf(fp, "#!/bin/sh\n"
-	            "LOGGER=\"logger -t splashd\"\n"
-	            "LOCK_FILE="NOCAT_LOCKFILE"\n"
-	            "if [ -f $LOCK_FILE ]; then\n"
-	            " $LOGGER \"Captive Portal halted (0), other process starting\"\n"
-	            " exit\n"
-	            "fi\n"
-	            "echo \"TOMATO64\" > $LOCK_FILE\n"
-	            "sleep 20\n"
-	            "[ -f "NOCAT_LEASES" ] || touch "NOCAT_LEASES"\n"
-	            "$LOGGER \"Captive Portal Splash Daemon started\"\n"
-	            "echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse\n"
-	            "/usr/sbin/splashd >> "NOCAT_LOGFILE" 2>&1 &\n"
-	            "sleep 2\n"
-	            "echo 0 > /proc/sys/net/ipv4/tcp_tw_reuse\n"
-	            "rm $LOCK_FILE\n");
-
-	fclose(fp);
-
-	chmod(NOCAT_START_SCRIPT, 0700);
 
 	xstart(NOCAT_START_SCRIPT);
 }

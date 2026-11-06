@@ -433,7 +433,7 @@ void start_stubby(void)
 	const static char *stubby_conf = "/etc/stubby/stubby.yml";
 	const static char *stubby_conf_alt = "/etc/stubby/stubby_alt.yml";
 	const static char *stubby_conf_custom = "/etc/stubby/stubby_custom.yml";
-	FILE *fp, *fc;
+	FILE *fp;
 	char *nv, *nvp, *b;
 	char *server, *tlsport, *hostname, *spkipin, *digest;
 	int ntp_ready, port, dnssec, ret;
@@ -461,12 +461,10 @@ void start_stubby(void)
 
 	/* custom configuration: use only this one, omit the other settings */
 	if (strlen(nvram_safe_get("stubby_custom")) > 0) {
-		if ((fc = fopen(stubby_conf_custom, "w")) == NULL) {
+		if (f_write_string(stubby_conf_custom, nvram_safe_get("stubby_custom"), FW_NEWLINE, 0644) < 0) {
 			logerr(__FUNCTION__, __LINE__, stubby_conf_custom);
 			return;
 		}
-		fprintf(fc, "%s\n", nvram_safe_get("stubby_custom"));
-		fclose(fc);
 
 		eval("stubby", "-g", "-v", nvram_safe_get("stubby_log"), "-C", (char *)stubby_conf_custom);
 		return;
@@ -534,6 +532,10 @@ void start_stubby(void)
 		if ((port < 0) || (port > 65535))
 			continue;
 
+		/* quoted/plain YAML fields must not escape into new directives */
+		if ((*hostname && strpbrk(hostname, "\"\\\r\n")) || (*spkipin && strpbrk(spkipin, "\r\n")))
+			continue;
+
 		/* add server */
 		fprintf(fp, "  - address_data: %s\n", server);
 		if (port)
@@ -599,7 +601,7 @@ void generate_mdns_config(void)
 	            ipv6_enabled() ? "yes" : "no");
 
 	for (i = 1; i <= mwan_num; i++) {
-		get_wan_prefix(i, tmp);
+		get_wan_prefix(i, tmp, sizeof(tmp));
 		if ((check_wanup(tmp)) || (i == 1))
 			fprintf(fp, "%s%s", (i == 1 ? "" : ","), get_wanface(tmp));
 	}
@@ -853,7 +855,7 @@ void dns_to_resolv(void)
 		mwan_num = 1;
 
 	for (wan_unit = 1; wan_unit <= mwan_num; ++wan_unit) {
-		get_wan_prefix(wan_unit, wan_prefix);
+		get_wan_prefix(wan_unit, wan_prefix, sizeof(wan_prefix));
 
 		/* skip inactive WAN connections */
 		if ((check_wanup(wan_prefix) == 0) &&
@@ -1011,7 +1013,7 @@ void start_ipv6_tunnel(void)
 	mwan_num = mwan_active_num();
 
 	for (wan_unit = 1; wan_unit <= mwan_num; ++wan_unit) {
-		get_wan_prefix(wan_unit, wan_prefix);
+		get_wan_prefix(wan_unit, wan_prefix, sizeof(wan_prefix));
 		if (check_wanup(wan_prefix))
 			break;
 	}
@@ -1098,7 +1100,7 @@ void start_6rd_tunnel(void)
 	mwan_num = mwan_active_num();
 
 	for (wan_unit = 1; wan_unit <= mwan_num; ++wan_unit) {
-		get_wan_prefix(wan_unit, wan_prefix);
+		get_wan_prefix(wan_unit, wan_prefix, sizeof(wan_prefix));
 		if (check_wanup(wan_prefix))
 			break;
 	}
@@ -1356,7 +1358,7 @@ void start_upnp(void)
 		upnp_port = 0;
 
 	for (i = 1; i <= mwan_num; i++) {
-		get_wan_prefix(i, tmp);
+		get_wan_prefix(i, tmp, sizeof(tmp));
 		if ((check_wanup(tmp)) || (i == 1))
 			fprintf(f, "ext_ifname=%s\n", get_wanface(tmp));
 	}
@@ -1796,7 +1798,7 @@ void start_igmp_proxy(void)
 				fprintf(fp, "quickleave\n");
 
 			for (wan_unit = 1; wan_unit <= mwan_num; ++wan_unit) {
-				get_wan_prefix(wan_unit, wan_prefix);
+				get_wan_prefix(wan_unit, wan_prefix, sizeof(wan_prefix));
 				if ((check_wanup(wan_prefix)) && (get_wanx_proto(wan_prefix) != WP_DISABLED)) {
 					count++;
 					/*
@@ -1979,6 +1981,10 @@ void start_ntpd(void)
 	 */
 	if (ntp_updates_int >= 0) { /* -1 = never */
 		ntp_server = nvram_safe_get("ntp_server");
+		if (strpbrk(ntp_server, "\r\n")) {
+			logmsg(LOG_ERR, "ntpd: invalid line break in ntp_server, exiting");
+			return;
+		}
 		servers_len = strlen(ntp_server);
 
 		/* allocating memory dynamically both so we don't waste memory, and in case of unanticipatedly long server name in nvram */
@@ -2055,7 +2061,6 @@ void stop_ntpd(void)
 
 int ntpd_synced_main(int argc, char *argv[])
 {
-	FILE *file;
 	char message[300];
 	char *stratum = safe_getenv("stratum");
 	char *offset = safe_getenv("offset");
@@ -2154,12 +2159,9 @@ int ntpd_synced_main(int argc, char *argv[])
 					    discipline_jitter,
 					    freq_drift_ppm);
 
-	if (!(file = fopen("/tmp/ntpd", "w"))) {
+	if (f_write_string("/tmp/ntpd", message, 0, 0644) < 0)
 		return 1;
-	}
 
-	fprintf(file,"%s", message);
-	fclose(file);
 	return 0;
 }
 
@@ -2285,8 +2287,8 @@ static void start_media_server(int force)
 			mkdir_if_none(dbdir ? : "/var/lib/minidlna");
 
 			/* persistent ident (router's mac as serial) */
-			if (!ether_atoe(nvram_safe_get("lan_hwaddr"), ea))
-				gen_urandom(NULL, ea, ETHER_ADDR_LEN, 0);
+			if (!ether_atoe(nvram_safe_get("lan_hwaddr"), ea) && !gen_urandom(NULL, ea, ETHER_ADDR_LEN, 0))
+				memset(ea, 0, sizeof(ea));
 
 			snprintf(serial, sizeof(serial), "%02x:%02x:%02x:%02x:%02x:%02x", ea[0], ea[1], ea[2], ea[3], ea[4], ea[5]);
 			snprintf(uuident, sizeof(uuident), "4d696e69-444c-164e-9d41-%02x%02x%02x%02x%02x%02x", ea[0], ea[1], ea[2], ea[3], ea[4], ea[5]);
@@ -3101,7 +3103,7 @@ static int svc_exec_simple(const struct svc_entry *svc, const char *service, int
 				stop_haveged();
 #endif
 				stop_jffs2();
-#if defined(TOMATO64_MT3600BE) || defined(TOMATO64_BCM53XX)
+#ifdef TOMATO64_HAS_UBI_SYSUPGRADE
 				/*
 				 * OpenWrt sysupgrade (stage2) owns the flash and reboot on these
 				 * devices; httpd never reaches finalize_upgrade(). Keep the
@@ -3115,7 +3117,7 @@ static int svc_exec_simple(const struct svc_entry *svc, const char *service, int
 				stop_usb();
 #endif /* TCONFIG_USB */
 				stop_nvme();
-#endif /* TOMATO64_MT3600BE || TOMATO64_BCM53XX */
+#endif /* TOMATO64_HAS_UBI_SYSUPGRADE */
 			}
 			return 1;
 		case SVCOP_UPGRADE_FINALIZE:
@@ -3204,13 +3206,13 @@ static int svc_exec_simple(const struct svc_entry *svc, const char *service, int
 		case SVCOP_QOS:
 			if (act_stop) {
 				for (i = 1; i <= (int)mwan_configured; i++) {
-					get_wan_prefix(i, ifname);
+					get_wan_prefix(i, ifname, sizeof(ifname));
 					stop_qos(ifname);
 				}
 			}
 			if (act_start) {
 				for (i = 1; i <= (int)mwan_num; i++) {
-					get_wan_prefix(i, ifname);
+					get_wan_prefix(i, ifname, sizeof(ifname));
 					if ((check_wanup(ifname)) || (i == 1))
 						start_qos(ifname);
 				}
@@ -3460,7 +3462,7 @@ static int svc_exec_simple(const struct svc_entry *svc, const char *service, int
 				rename("/tmp/ppp/wan_log", "/tmp/ppp/wan_log.~");
 				start_wan();
 				for (i = 1; i <= (int)mwan_num; i++) {
-					get_wan_prefix(i, ifname);
+					get_wan_prefix(i, ifname, sizeof(ifname));
 					sleep(5);
 					force_to_dial(ifname);
 				}

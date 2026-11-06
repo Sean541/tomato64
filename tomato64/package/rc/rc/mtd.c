@@ -258,7 +258,7 @@ int mtd_unlock_erase_main_old(int argc, char *argv[])
 int mtd_unlock_erase_main(int argc, char *argv[])
 #endif
 {
-	char c;
+	int c;
 	char *dev = NULL;
 
 	while ((c = getopt(argc, argv, "d:")) != -1) {
@@ -291,7 +291,7 @@ int mtd_write_main_old(int argc, char *argv[])
 	unsigned long filelen = 0, unit_len;
 	struct sysinfo si;
 	uint32 ofs;
-	char c;
+	int c;
 	char *iname = NULL;
 	char *dev = NULL;
 	char msg_buf[2048];
@@ -479,6 +479,7 @@ int mtd_write_main(int argc, char *argv[])
 	uint32 netgear_chk_len;
 #endif
 	uint32 crc;
+	uint32 header_len;
 	FILE *f;
 	char *buf = NULL;
 	const char *error;
@@ -486,14 +487,19 @@ int mtd_write_main(int argc, char *argv[])
 	size_t  n;
 	struct sysinfo si;
 	uint32 ofs;
-	char c;
+	int c;
 	int web = 0;
+	int check_only = 0;
+	int crc_ok = 0;
 	char *iname = NULL;
 	char *dev = NULL;
 	int model;
 
-	while ((c = getopt(argc, argv, "i:d:w")) != -1) {
+	while ((c = getopt(argc, argv, "ci:d:w")) != -1) {
 		switch (c) {
+		case 'c':
+			check_only = 1;
+			break;
 		case 'i':
 			iname = optarg;
 			break;
@@ -507,14 +513,16 @@ int mtd_write_main(int argc, char *argv[])
 	}
 
 	if ((iname == NULL) || (dev == NULL)) {
-		usage_exit(argv[0], "-i file -d part");
+		usage_exit(argv[0], "[-c] -i file -d part");
 	}
 
-	if (!wait_action_idle(10)) {
-		printf("System is busy\n");
-		return 1;
+	if (!check_only) {
+		if (!wait_action_idle(10)) {
+			printf("System is busy\n");
+			return 1;
+		}
+		set_action(ACT_WEB_UPGRADE);
 	}
-	set_action(ACT_WEB_UPGRADE);
 
 	if ((f = fopen(iname, "r")) == NULL) {
 		error = "Error opening input file";
@@ -570,28 +578,48 @@ int mtd_write_main(int argc, char *argv[])
 		}
 		break;
 	case 0x5E24232A: /* Netgear */
-		/* get the Netgear header length */
-		if (safe_fread(&n, 1, sizeof(n), f) != sizeof(n)) {
+		/* get the 32-bit Netgear header length */
+		if (safe_fread(&header_len, 1, sizeof(header_len), f) != sizeof(header_len)) {
 			goto ERROR;
 		}
 #ifdef TCONFIG_BLINK /* RT-N/RTAC */
-		else {
-			/* and Byte Swap, Netgear header is big endian, machine is little endian */
-			n = BCMSWAP32(n);
-			_dprintf("*** %s: read Netgear header length: 0x%x\n", __FUNCTION__, n);
-		}
+		header_len = BCMSWAP32(header_len);
+		_dprintf("*** %s: read Netgear header length: 0x%x\n", __FUNCTION__, header_len);
 
-		/* read (formatted) Netgear CHK header (now that we know how long it is) */
-		// rewind(f); /* disabled, not working for some reason? Adjust structure above to account for this */
-		if (safe_fread(&netgear_hdr, 1, n-sizeof(sig)-sizeof(n), f) != (n-sizeof(sig)-sizeof(n))) {
+		if (header_len < (sizeof(sig) + sizeof(header_len) + sizeof(netgear_hdr))) {
+			error = "Invalid Netgear header";
 			goto ERROR;
 		}
-		else
-			_dprintf("*** %s: read Netgear header, magic=0x%x, length=0x%x\n", __FUNCTION__, sig, n);
+
+		n = (size_t)header_len - sizeof(sig) - sizeof(header_len);
+
+		/* read the fixed CHK fields we use */
+		if (safe_fread(&netgear_hdr, 1, sizeof(netgear_hdr), f) != sizeof(netgear_hdr)) {
+			goto ERROR;
+		}
+
+		/* consume any variable board-id/header tail without overflowing netgear_hdr */
+		n -= sizeof(netgear_hdr);
+		while (n > 0) {
+			char discard[128];
+			size_t chunk = MIN(n, sizeof(discard));
+
+			if (safe_fread(discard, 1, chunk, f) != chunk)
+				goto ERROR;
+			n -= chunk;
+		}
+
+		_dprintf("*** %s: read Netgear header, magic=0x%x, length=0x%x\n", __FUNCTION__, sig, header_len);
 #else
+		header_len = ntohl(header_len);
+		if (header_len < (sizeof(sig) + sizeof(header_len))) {
+			error = "Invalid Netgear header";
+			goto ERROR;
+		}
+
 		/* skip the header - we can't use seek() for fifo, so read the rest of the header */
-		n = ntohl(n) - sizeof(sig) - sizeof(n);
-		if ((buf = malloc(n + 1)) == NULL) {
+		n = (size_t)header_len - sizeof(sig) - sizeof(header_len);
+		if ((n == SIZE_MAX) || ((buf = malloc(n + 1)) == NULL)) {
 			error = "Not enough memory";
 			goto ERROR;
 		}
@@ -691,14 +719,23 @@ int mtd_write_main(int argc, char *argv[])
 
 	_dprintf("*** %s: mtd size=%6x, erasesize=%6x\n", __FUNCTION__, mi.size, mi.erasesize);
 
-	total = ROUNDUP(trx.len, mi.erasesize);
-	if (total > mi.size) {
-		error = "File is too big to fit in MTD";
-		goto ERROR;
+	{
+		uint32 rem = trx.len % mi.erasesize;
+		uint32 pad = rem ? (mi.erasesize - rem) : 0;
+
+		if ((trx.len > mi.size) || (pad > mi.size - trx.len)) {
+			error = "File is too big to fit in MTD";
+			goto ERROR;
+		}
+		total = trx.len + pad;
 	}
 
 	sysinfo(&si);
-	if ((si.freeram * si.mem_unit) > (total + (256 * 1024))) {
+	if (check_only) {
+		/* Avoid duplicating the staged image in RAM while validating it. */
+		ei.length = mi.erasesize;
+	}
+	else if ((si.freeram * si.mem_unit) > (total + (256 * 1024))) {
 		ei.length = total;
 	}
 	else {
@@ -713,8 +750,8 @@ int mtd_write_main(int argc, char *argv[])
 	}
 
 #ifdef DEBUG_SIMULATE
-	FILE *of;
-	if ((of = fopen("/mnt/out.bin", "w")) == NULL) {
+	FILE *of = NULL;
+	if (!check_only && (of = fopen("/mnt/out.bin", "w")) == NULL) {
 		error = "Error creating test file";
 		goto ERROR;
 	}
@@ -750,9 +787,10 @@ int mtd_write_main(int argc, char *argv[])
 				error = "Image is corrupt";
 				break;
 			}
+			crc_ok = 1;
 		}
 
-		if (!web) {
+		if (!check_only && !web) {
 			printf("Writing %x-%x\r", ei.start, (ei.start + ei.length) - 1);
 		}
 
@@ -760,31 +798,39 @@ int mtd_write_main(int argc, char *argv[])
 
 		n += ofs;
 
-		_dprintf(" erase start=%x len=%x\n", ei.start, ei.length);
-		_dprintf(" write %x\n", n);
+		if (!check_only) {
+			_dprintf(" erase start=%x len=%x\n", ei.start, ei.length);
+			_dprintf(" write %x\n", n);
 
 #ifdef DEBUG_SIMULATE
-		if (fwrite(buf, 1, n, of) != n) {
-			fclose(of);
-			error = "Error writing to test file";
-			break;
-		}
+			if (fwrite(buf, 1, n, of) != n) {
+				error = "Error writing to test file";
+				break;
+			}
 #else
-		ioctl(mf, MEMUNLOCK, &ei);
-		if (ioctl(mf, MEMERASE, &ei) != 0
+			ioctl(mf, MEMUNLOCK, &ei);
+			if (ioctl(mf, MEMERASE, &ei) != 0
 #ifdef TCONFIG_BLINK /* RT-N/RTAC */
-		    && model != MODEL_WNR3500LV2
+			    && model != MODEL_WNR3500LV2
 #endif
-		) {
-			error = "Error erasing MTD block";
-			break;
-		}
-		if (write(mf, buf, n) != (int) n) {
-			error = "Error writing to MTD device";
-			break;
-		}
+			) {
+				error = "Error erasing MTD block";
+				break;
+			}
+			if (write(mf, buf, n) != (int) n) {
+				error = "Error writing to MTD device";
+				break;
+			}
 #endif /* DEBUG_SIMULATE */
+		}
 		ofs = 0;
+	}
+
+	if (error)
+		goto ERROR;
+	if (!crc_ok) {
+		error = "Image CRC was not fully validated";
+		goto ERROR;
 	}
 
 	/* Netgear WNR3500L: write fake len and checksum at the end of mtd */
@@ -792,7 +838,8 @@ int mtd_write_main(int argc, char *argv[])
 	char *tmp;
 	char imageInfo[8];
 
-	switch (model) {
+	if (!check_only) {
+		switch (model) {
 	case MODEL_WNR3500L:
 	case MODEL_WNR2000v2:
 #ifdef TCONFIG_BLINK /* RT-N/RTAC */
@@ -886,18 +933,22 @@ ERROR2:
 		/* ignore crc write errors */
 		error = NULL;
 		break;
+		}
 	}
 
 #ifdef DEBUG_SIMULATE
-	fclose(of);
+	if (of)
+		fclose(of);
 #endif
 
 ERROR:
 	if (buf)
 		free(buf);
 	if (mf >= 0) {
-		/* dummy read to ensure chip(s) are out of lock/suspend state */
-		read(mf, &n, sizeof(n));
+		if (!check_only) {
+			/* dummy read to ensure chip(s) are out of lock/suspend state */
+			read(mf, &n, sizeof(n));
+		}
 		close(mf);
 	}
 	if (f)
@@ -906,11 +957,12 @@ ERROR:
 	crc_done();
 
 #ifdef DEBUG_SIMULATE
-	set_action(ACT_IDLE);
+	if (!check_only)
+		set_action(ACT_IDLE);
 #endif
 
-	printf("%s\n",  error ? error : "Image successfully flashed");
-	_dprintf("*** %s: %s\n", __FUNCTION__, error ? error : "image successfully flashed");
+	printf("%s\n", error ? error : (check_only ? "Image successfully verified" : "Image successfully flashed"));
+	_dprintf("*** %s: %s\n", __FUNCTION__, error ? error : (check_only ? "image successfully verified" : "image successfully flashed"));
 
 	return (error ? 1 : 0);
 }
@@ -1049,6 +1101,38 @@ enum {
 	METHOD_POST
 };
 
+static int parse_http_size(const char *s, int base, size_t *value)
+{
+	char *end;
+	unsigned long v;
+
+	if (!s || !value)
+		return -1;
+
+	while (is_blank(*s))
+		s++;
+
+	if (*s == '\0' || *s == '+' || *s == '-')
+		return -1;
+
+	errno = 0;
+	v = strtoul(s, &end, base);
+	if ((errno == ERANGE) || (end == s))
+		return -1;
+
+	while (is_blank(*end))
+		end++;
+
+	if ((*end != '\0') && (*end != '\r') && (*end != '\n') && ((base != 16) || (*end != ';')))
+		return -1;
+
+	if (v > (unsigned long)((size_t)-1))
+		return -1;
+
+	*value = (size_t)v;
+	return 0;
+}
+
 static int wget(int method, const char *server, char *buf, size_t count, off_t offset)
 {
 	char url[PATH_MAX] = { 0 }, *s;
@@ -1058,14 +1142,14 @@ static int wget(int method, const char *server, char *buf, size_t count, off_t o
 	FILE *fp;
 	struct sockaddr_in sin;
 	int chunked = 0;
-	unsigned len = 0;
+	size_t len = 0;
 
 	if (server == NULL || !strcmp(server, "")) {
 		_dprintf("*** %s: wget: null server input\n", __FUNCTION__);
 		return (0);
 	}
 
-	strncpy(url, server, sizeof(url));
+	strlcpy(url, server, sizeof(url));
 
 	/* Parse URL */
 	if (!strncmp(url, "http://", 7)) {
@@ -1137,9 +1221,10 @@ static int wget(int method, const char *server, char *buf, size_t count, off_t o
 		if (*s == '\n')
 			break;
 		if (!strncasecmp(s, "Content-Length:", 15)) {
-			for (s += 15; is_blank(*s); s++);
+			s += 15;
 			chomp(s);
-			len = atoi(s);
+			if (parse_http_size(s, 10, &len) != 0)
+				goto done;
 		}
 		else if (!strncasecmp(s, "Transfer-Encoding:", 18)) {
 			for (s += 18; is_blank(*s); s++);
@@ -1149,10 +1234,13 @@ static int wget(int method, const char *server, char *buf, size_t count, off_t o
 		}
 	}
 
-	if (chunked && fgets(line, sizeof(line), fp))
-		len = strtol(line, NULL, 16);
+	if (chunked) {
+		if (!fgets(line, sizeof(line), fp) || (parse_http_size(line, 16, &len) != 0))
+			goto done;
+	}
 
-	len = (len > count) ? count : len;
+	if (len > count)
+		len = count;
 	len = fread(buf, 1, len, fp);
 
 done:
@@ -1246,7 +1334,14 @@ static int mtd_write_internal(const char *path, const char *mtd, int check_only)
 		/* See if we have enough memory to store the whole file */
 		sysinfo(&info);
 		if (info.freeram >= trx.len) {
-			erase_info.length = ROUNDUP(trx.len, mtd_info.erasesize);
+			uint32 rem = trx.len % mtd_info.erasesize;
+			uint32 pad = rem ? (mtd_info.erasesize - rem) : 0;
+
+			if (pad <= mtd_info.size - trx.len)
+				erase_info.length = trx.len + pad;
+			else
+				erase_info.length = mtd_info.erasesize;
+
 			if (!(buf = malloc(erase_info.length)))
 				erase_info.length = mtd_info.erasesize;
 		}

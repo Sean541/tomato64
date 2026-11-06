@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <stdarg.h>
@@ -32,6 +33,9 @@
 
 #include "shutils.h"
 #include "shared.h"
+#ifdef TOMATO64
+#include <limits.h>
+#endif /* TOMATO64 */
 
 /* needed by logmsg() */
 #define LOGMSG_DISABLE	DISABLE_SYSLOG_OS
@@ -193,12 +197,15 @@ char *bridge_nvram_get(unsigned int bridge, const char *suffix, char *key, const
  * @param iWan_unit  WAN unit number; 1 maps to "wan", 2..MWAN_MAX to "wanN"
  * @param sPrefix    destination buffer; must be large enough for "wanN"
  */
-void get_wan_prefix(int iWan_unit, char *sPrefix)
+void get_wan_prefix(int iWan_unit, char *sPrefix, size_t prefix_size)
 {
+	if (!sPrefix || !prefix_size)
+		return;
+
 	if ((iWan_unit > 1) && (iWan_unit <= MWAN_MAX))
-		sprintf(sPrefix, "wan%d", iWan_unit);
+		snprintf(sPrefix, prefix_size, "wan%d", iWan_unit);
 	else
-		strcpy(sPrefix, "wan");
+		strlcpy(sPrefix, "wan", prefix_size);
 }
 
 /*
@@ -213,7 +220,7 @@ static void get_wan_nvram_key(int wan_unit, const char *suffix, char *key, const
 {
 	char prefix[8];
 
-	get_wan_prefix(wan_unit, prefix);
+	get_wan_prefix(wan_unit, prefix, sizeof(prefix));
 	get_prefix_nvram_key(prefix, suffix, key, key_size);
 }
 
@@ -238,7 +245,7 @@ int get_wan_unit(const char *sPrefix)
 	unsigned int i, ret = 1;
 
 	for (i = 1; i <= MWAN_MAX; i++) {
-		get_wan_prefix(i, wanstr);
+		get_wan_prefix(i, wanstr, sizeof(wanstr));
 
 		if (!strcmp(sPrefix, wanstr)) {
 			ret = i;
@@ -259,7 +266,7 @@ int get_wan_unit_with_value(const char *suffix, const char *value)
 		mwan_num = 1;
 
 	for (wan_unit = 1; wan_unit <= mwan_num; ++wan_unit) {
-		get_wan_prefix(wan_unit, tmp);
+		get_wan_prefix(wan_unit, tmp, sizeof(tmp));
 		strlcat(tmp, suffix, sizeof(tmp));
 
 		if (nvram_match(tmp, value))
@@ -738,7 +745,7 @@ int wan_led_off(char *prefix) /* off WAN LED only if no other WAN active */
 		mwan_num = 1;
 
 	for (i = 1; i <= mwan_num; i++) {
-		get_wan_prefix(i, wanstr);
+		get_wan_prefix(i, wanstr, sizeof(wanstr));
 
 		up = 0; /* default is 0 (LED_OFF) */
 		if (!strcmp(prefix, wanstr))
@@ -761,30 +768,13 @@ int wan_led_off(char *prefix) /* off WAN LED only if no other WAN active */
 						close(f);
 						if ((ifr.ifr_flags & IFF_UP) == 0 || (ifr.ifr_flags & IFF_RUNNING) == 0)
 							up = 0;
-						if (proto == WP_STATIC) { /* check port state for static */
+						if ((proto == WP_STATIC) || (proto == WP_DHCP)) {
+							int link = wan_phy_link(wanstr);
 
-							int a;		/* port number: 0/1/2/3/4 */
-							char b[16];	/* port state: DOWN/SPEED */
-							int c;		/* port vlan: 1/2/3/4/etc */
-							char d[4];
-							FILE *f = NULL;
-
-							strcpy(d, &ifr.ifr_name[4]); /* trim vlan */
-							int vlannum = atoi(d);
-/* Skip  this test in T64 for now */
-#ifndef TOMATO64
-							if ((f = popen("/usr/sbin/robocfg showports", "r")) != NULL) {
-								while (fgets(tmp, sizeof(tmp), f)) {
-									if (sscanf(tmp, "Port %d: %s %*s %*s %*s vlan: %d %*s", &a, b, &c) == 3) {
-										if ((strncmp(b, "DOWN", 4) == 0) && (c == vlannum)) {
-											logmsg(LOG_DEBUG, "*** %s: state = DOWN for vlan%d", __FUNCTION__, vlannum);
-											up = 0;
-										}
-									}
-								}
-								pclose(f);
+							if (link == 0) {
+								logmsg(LOG_DEBUG, "*** %s: physical Ethernet link DOWN for %s", __FUNCTION__, wanstr);
+								up = 0;
 							}
-#endif /* TOMATO64 */
 						}
 					}
 				}
@@ -841,6 +831,168 @@ long check_wanup_time(char *prefix)
 
 	return wanuptime;
 }
+
+/* The physical WAN jack must not depend on the configured WAN VLAN. */
+int get_default_wan_phy_port(void)
+{
+	const char *router_name = nvram_safe_get("t_fix1");
+	int i;
+#ifdef TCONFIG_BCMARM
+	/* ARM routers with WAN on Port 4 */
+	static const char *port4_routers[] = { "Netgear AC1450", "Netgear R6200v2", "Netgear R6250",
+	                                       "Netgear R6300v2", "RT-AC56U", "RT-AC56S", "RT-AC3100",
+	                                       "RT-AC88U", "DIR868L", "EA6200", "EA6350v1", "EA6350v2",
+	                                       "EA6400", "EA6500v2", "EA6700", "R7900", "R8000", NULL
+	                                     };
+#else
+	/* MIPS routers with WAN on Port 4 */
+	static const char *port4_routers[] = { "RT-N10P", "RT-N12 A1", "RT-N12 B1", "RT-N12 C1", "RT-N12 D1",
+	                                       "RT-N12 HP", "RT-N15U", "RT-N53", "RT-N53 A1",
+	                                       "Share Max N300 (F7D3301/F7D7301) v1",
+	                                       "Play Max / N600 HD (F7D4301/F7D8301) v1", "WNDR3400",
+	                                       "WNDR3400v2", "WNDR3400v3", "R6300 V1",
+	                                       "Share N300 (F7D3302/F7D7302) v1",
+	                                       "Play N600 (F7D4302/F7D8302) v1", "N600 DB Wireless N+",
+	                                       "Dir-620 C1", "E800 v1.0", "E900 v1.0", "E1200 v1.0",
+	                                       "E1200 v2.0", "E1500 v1.0", "E1550 v1.0", "E2500 v1.0",
+	                                       "E2500 v1/v2/v3", "E3200 v1.0", "E4200 v1", "WNDR3700v3",
+	                                       "WNDR4000", "WNDR4500 V1", "WNDR4500 V2", NULL
+	                                     };
+#endif
+
+	for (i = 0; port4_routers[i]; ++i) {
+		if (strcmp(router_name, port4_routers[i]) == 0)
+			return 4;
+	}
+
+	return 0;
+}
+
+int get_wan_phy_port(char *prefix)
+{
+	char ifname[IFNAMSIZ], ports_var[32], ports_buf[128], tmp[128];
+	char *token, *last_token = NULL, *saveptr = NULL;
+	int vport = 0, vport_last = 0;
+
+	strlcpy(ifname, prefix_nvram_get(prefix, "ifname", tmp, sizeof(tmp)), sizeof(ifname));
+	if (!*ifname || (strcmp(ifname, "none") == 0))
+		return -1;
+
+	if (snprintf(ports_var, sizeof(ports_var), "%sports", ifname) >= (int)sizeof(ports_var))
+		return -1;
+
+	strlcpy(ports_buf, nvram_safe_get(ports_var), sizeof(ports_buf));
+	token = strtok_r(ports_buf, " \t", &saveptr);
+
+	if (token) {
+		while (*token && !isdigit((unsigned char)*token))
+			token++;
+		if (*token)
+			vport = atoi(token);
+		else
+			token = NULL;
+
+		last_token = token;
+		while ((token = strtok_r(NULL, " \t", &saveptr)) != NULL)
+			last_token = token;
+
+		if (last_token) {
+			while (*last_token && !isdigit((unsigned char)*last_token))
+				last_token++;
+			if (*last_token)
+				vport_last = atoi(last_token);
+		}
+	}
+
+	/*
+	 * A secondary WAN has no model-specific dedicated-port fallback.
+	 * A single vlanXports entry is therefore already an explicit mapping
+	 * (for example "1") and must not be rejected merely because there is
+	 * no CPU-port token in that NVRAM value.
+	 */
+	if (strcmp(prefix, "wan") != 0)
+		return last_token ? vport : -1;
+
+	/*
+	 * Preserve the primary-WAN fallback for incomplete switch mappings.
+	 * This remains independent of the GUI's physical port ordering.
+	 */
+	if (!last_token || (vport_last == vport) || (vport_last == 0))
+		return get_default_wan_phy_port();
+
+	return vport;
+}
+
+
+/*
+ * Return the physical Ethernet link state for a WAN switch port.
+ *
+ *  1 = link up
+ *  0 = link down
+ * -1 = state cannot be determined
+ *
+ * Broadcom VLAN netdevs stay IFF_RUNNING while the external switch port is
+ * unplugged, so SIOCGIFFLAGS alone cannot detect a modem/cable link loss.
+ */
+int wan_phy_link(char *prefix)
+{
+#ifndef TOMATO64
+	char line[128], state[16], tmp[32];
+	int port, wan_port;
+	FILE *f;
+#else
+	struct ifreq ifr;
+	char tmp[32];
+	char *ifname;
+	int s, r;
+#endif /* TOMATO64 */
+
+	/* Wireless-client WANs have no physical switch carrier to monitor. */
+	if (*prefix_nvram_get(prefix, "sta", tmp, sizeof(tmp)))
+		return -1;
+
+#ifndef TOMATO64
+	wan_port = get_wan_phy_port(prefix);
+	if (wan_port < 0)
+		return -1;
+
+	if ((f = popen("/usr/sbin/robocfg showports 2>/dev/null", "r")) == NULL)
+		return -1;
+
+	while (fgets(line, sizeof(line), f)) {
+		if (sscanf(line, "Port %d: %15s", &port, state) != 2)
+			continue;
+		if (port != wan_port)
+			continue;
+
+		pclose(f);
+		return (strncmp(state, "DOWN", 4) == 0) ? 0 : 1;
+	}
+
+	pclose(f);
+	return -1;
+#else
+	/* IFF_RUNNING tracks the WAN netdev's carrier; SIOCGIFFLAGS is lockless,
+	 * unlike sysfs carrier, which spins while RTNL is held */
+	ifname = prefix_nvram_get(prefix, "ifname", tmp, sizeof(tmp));
+	if (!*ifname || (strcmp(ifname, "none") == 0) || (strlen(ifname) >= sizeof(ifr.ifr_name)))
+		return -1;
+
+	if ((s = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+		return -1;
+
+	memset(&ifr, 0, sizeof(ifr));
+	strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+	r = ioctl(s, SIOCGIFFLAGS, &ifr);
+	close(s);
+
+	if ((r < 0) || ((ifr.ifr_flags & IFF_UP) == 0))
+		return -1;
+
+	return (ifr.ifr_flags & IFF_RUNNING) ? 1 : 0;
+#endif /* TOMATO64 */
+}
+
 
 int check_wanup(char *prefix)
 {
@@ -917,47 +1069,13 @@ int check_wanup(char *prefix)
 			logmsg(LOG_DEBUG, "*** %s: !IFF_UP || !IFF_RUNNING", __FUNCTION__);
 		}
 
-		if (proto == WP_STATIC) {
-			/* Ethernet WAN port state checker (static IF is always UP and RUNNING)
-			   ifr.ifr_name = vlan2, vlan3 etc
-			   nvram get vlan2ports
-			   4 5
-			   nvram get vlan3ports
-			   1 5
-			   robocfg showports
-			   Switch: enabled
-			   Port 0: 1000FD enabled stp: none vlan: 1 jumbo: off mac: 00:00:80:00:00:00
-			   Port 1:   DOWN enabled stp: none vlan: 3 jumbo: off mac: 00:00:00:00:00:00
-			   Port 2:   DOWN enabled stp: none vlan: 1 jumbo: off mac: 00:00:00:00:00:00
-			   Port 3:   DOWN enabled stp: none vlan: 1 jumbo: off mac: 00:00:00:00:00:00
-			   Port 4:  100FD enabled stp: none vlan: 2 jumbo: off mac: 00:00:00:00:00:00
-			   Port 8:   DOWN enabled stp: none vlan: 1 jumbo: off mac: 00:00:00:00:00:00
-			*/
+		if ((proto == WP_STATIC) || (proto == WP_DHCP)) {
+			int link = wan_phy_link(prefix);
 
-			int a;		/* port number: 0/1/2/3/4 */
-			char b[16];	/* port state: DOWN/SPEED */
-			int c;		/* port vlan: 1/2/3/4/etc */
-			char d[4];
-			FILE *f;
-
-			strcpy(d, &ifr.ifr_name[4]); /* trim vlan */
-			int vlannum = atoi(d);
-			logmsg(LOG_DEBUG, "*** %s: %s vlan num: %d", __FUNCTION__, prefix, vlannum);
-
-/* Skip  this test in T64 for now */
-#ifndef TOMATO64
-			if ((f = popen("/usr/sbin/robocfg showports", "r")) != NULL) {
-				while (fgets(tmp, sizeof(tmp), f)) {
-					if (sscanf(tmp, "Port %d: %s %*s %*s %*s vlan: %d %*s", &a, b, &c) == 3) {
-						if ((strncmp(b, "DOWN", 4) == 0) && (c == vlannum)) {
-							logmsg(LOG_DEBUG, "*** %s: port state = DOWN for vlan%d", __FUNCTION__, vlannum);
-							up = 0;
-						}
-					}
-				}
-				pclose(f);
+			if (link == 0) {
+				logmsg(LOG_DEBUG, "*** %s: physical Ethernet link DOWN for %s", __FUNCTION__, prefix);
+				up = 0;
 			}
-#endif /* TOMATO64 */
 		}
 	}
 
@@ -1357,18 +1475,29 @@ int nvram_get_file(const char *key, const char *fname, int max)
 	int n;
 	char *p;
 	unsigned char *b;
+	unsigned int decoded_max;
+	size_t input_len;
 	int r;
+
+	if (max < 0)
+		return 0;
 
 	r = 0;
 	p = nvram_safe_get(key);
-	n = strlen(p);
-	if (n <= max) {
-		if ((b = malloc(base64_decoded_len(n) + 128)) != NULL) {
-			n = base64_decode(p, b, n);
-			if (n > 0)
-				r = (f_write(fname, b, n, 0, 0644) == n);
-			free(b);
-		}
+	input_len = strlen(p);
+	if ((input_len > (size_t)max) || (input_len > INT_MAX))
+		return 0;
+
+	n = (int)input_len;
+	decoded_max = base64_decoded_len(n);
+	if ((decoded_max == 0) && (n != 0))
+		return 0;
+
+	if ((b = malloc(decoded_max ? (size_t)decoded_max : 1)) != NULL) {
+		n = base64_decode(p, b, n);
+		if ((n > 0) && ((unsigned int)n <= decoded_max))
+			r = (f_write(fname, b, n, 0, 0644) == n);
+		free(b);
 	}
 	return r;
 /*
@@ -1390,22 +1519,33 @@ int nvram_set_file(const char *key, const char *fname, int max)
 {
 	char *in;
 	char *out;
-	long len;
+	unsigned long file_len;
+	unsigned int encoded_max;
 	int n;
 	int r;
 
-	if ((len = f_size(fname)) > max)
+	if (max < 0)
 		return 0;
 
-	max = (int)len;
+	file_len = f_size(fname);
+	if ((file_len == (unsigned long)-1) || (file_len > (unsigned long)max))
+		return 0;
+
+	max = (int)file_len;
+	encoded_max = base64_encoded_len(max);
+	if ((encoded_max == 0) && (max != 0))
+		return 0;
+
 	r = 0;
 	if (f_read_alloc(fname, &in, max) == max) {
-		if ((out = malloc(base64_encoded_len(max) + 128)) != NULL) {
+		if ((out = malloc((size_t)encoded_max + 1)) != NULL) {
 			n = base64_encode((unsigned char *)in, out, max);
-			out[n] = 0;
-			nvram_set(key, out);
+			if ((n >= 0) && ((unsigned int)n <= encoded_max)) {
+				out[n] = '\0';
+				nvram_set(key, out);
+				r = 1;
+			}
 			free(out);
-			r = 1;
 		}
 		free(in);
 	}
@@ -1456,19 +1596,30 @@ void chld_reap(int sig)
 	while (waitpid(-1, NULL, WNOHANG) > 0) {}
 }
 
-void gen_urandom(char *buf1, unsigned char *buf2, size_t buf_sz, const unsigned int addtid)
+int gen_urandom(char *buf1, unsigned char *buf2, size_t buf_sz, const unsigned int addtid)
 {
-	unsigned long long sn = 0;
+	unsigned long long sn;
+
+	if (!buf_sz || (!buf1 && !buf2))
+		return 0;
 
 	if (buf1) {
-		f_read("/dev/urandom", &sn, sizeof(sn));
+		if (f_read("/dev/urandom", &sn, sizeof(sn)) != (int)sizeof(sn)) {
+			buf1[0] = '\0';
+			return 0;
+		}
+
 		if (addtid)
 			snprintf(buf1, buf_sz, "TID%llx", sn);
 		else
 			snprintf(buf1, buf_sz, "%llu", sn & 0x7FFFFFFFFFFFFFFFULL);
 	}
 	else {
-		memset((char *)buf2, 0, buf_sz);
-		f_read("/dev/urandom", buf2, buf_sz);
+		if ((buf_sz > INT_MAX) || (f_read("/dev/urandom", buf2, (int)buf_sz) != (int)buf_sz)) {
+			memset(buf2, 0, buf_sz);
+			return 0;
+		}
 	}
+
+	return 1;
 }

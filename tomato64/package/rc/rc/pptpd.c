@@ -58,7 +58,8 @@ static char *ip2bcast(char *ip, char *netmask, char *buf, const size_t buf_sz)
 	return buf;
 }
 
-static void write_chap_secret(char *file)
+
+static int write_chap_secret(const char *file)
 {
 	FILE *fp;
 	char *nv, *nvp, *b;
@@ -66,7 +67,13 @@ static void write_chap_secret(char *file)
 
 	if ((fp = fopen(file, "w")) == NULL) {
 		logerr(__FUNCTION__, __LINE__, file);
-		return;
+		return -1;
+	}
+	/* Restrict CHAP credentials before writing them. */
+	if (fchmod(fileno(fp), 0600) != 0) {
+		logerr(__FUNCTION__, __LINE__, file);
+		fclose(fp);
+		return -1;
 	}
 
 	nv = nvp = strdup(nvram_safe_get("pptpd_users"));
@@ -76,14 +83,17 @@ static void write_chap_secret(char *file)
 			if ((vstrsep(b, "<", &username, &passwd) < 2))
 				continue;
 
-			if (*username =='\0' || *passwd == '\0')
+			if (!str_isalnum_extra(username, "._-", 1, 32) || !str_isalnum_extra(passwd, "._-", 1, 32)) {
+				logmsg(LOG_WARNING, "PPTP: ignoring invalid CHAP user entry");
 				continue;
+			}
 
 			fprintf(fp, "%s * %s *\n", username, passwd);
 		}
 		free(nv);
 	}
 	fclose(fp);
+	return 0;
 }
 
 static void build_pptpd_firewall(void)
@@ -177,6 +187,16 @@ static void build_pptpd_firewall(void)
 	chmod(PPTPD_FW_SCRIPT, 0744);
 }
 
+static int pptpd_write_ipv4_option(FILE *fp, const char *option, const char *value)
+{
+	struct in_addr addr;
+
+	if (!value || !*value || (inet_pton(AF_INET, value, &addr) != 1))
+		return 0;
+
+	return (fprintf(fp, "%s %s\n", option, value) > 0);
+}
+
 void start_pptpd(int force)
 {
 	FILE *fp;
@@ -195,6 +215,11 @@ void start_pptpd(int force)
 	/* Create unique options file */
 	if ((fp = fopen(PPTPD_OPTIONS, "w")) == NULL) {
 		logerr(__FUNCTION__, __LINE__, PPTPD_OPTIONS);
+		return;
+	}
+	if (fchmod(fileno(fp), 0600) != 0) {
+		logerr(__FUNCTION__, __LINE__, PPTPD_OPTIONS);
+		fclose(fp);
 		return;
 	}
 
@@ -242,12 +267,10 @@ void start_pptpd(int force)
 	            nvram_get_int("pptpd_mru") ? : 1400);
 
 	/* DNS Server */
-	if (nvram_invmatch("pptpd_dns1", ""))
-		count += fprintf(fp, "ms-dns %s\n", nvram_safe_get("pptpd_dns1")) > 0 ? 1 : 0;
-	if (nvram_invmatch("pptpd_dns2", ""))
-		count += fprintf(fp, "ms-dns %s\n", nvram_safe_get("pptpd_dns2")) > 0 ? 1 : 0;
-	if (count == 0 && nvram_invmatch("lan_ipaddr", ""))
-		fprintf(fp, "ms-dns %s\n", nvram_safe_get("lan_ipaddr"));
+	count += pptpd_write_ipv4_option(fp, "ms-dns", nvram_safe_get("pptpd_dns1"));
+	count += pptpd_write_ipv4_option(fp, "ms-dns", nvram_safe_get("pptpd_dns2"));
+	if (count == 0)
+		pptpd_write_ipv4_option(fp, "ms-dns", nvram_safe_get("lan_ipaddr"));
 
 	/* WINS Server */
 	if (nvram_match("wan_wins", "0.0.0.0") || (strlen(nvram_safe_get("wan_wins")) == 0)) {
@@ -256,13 +279,10 @@ void start_pptpd(int force)
 	}
 
 	if (!nowins)
-		fprintf(fp, "ms-wins %s\n", nvram_safe_get("wan_wins"));
+		pptpd_write_ipv4_option(fp, "ms-wins", nvram_safe_get("wan_wins"));
 
-	if (strlen(nvram_safe_get("pptpd_wins1")))
-		fprintf(fp, "ms-wins %s\n", nvram_safe_get("pptpd_wins1"));
-
-	if (strlen(nvram_safe_get("pptpd_wins2")))
-		fprintf(fp, "ms-wins %s\n", nvram_safe_get("pptpd_wins2"));
+	pptpd_write_ipv4_option(fp, "ms-wins", nvram_safe_get("pptpd_wins1"));
+	pptpd_write_ipv4_option(fp, "ms-wins", nvram_safe_get("pptpd_wins2"));
 
 	fprintf(fp, "minunit 10\n" /* force ppp interface starting from 10 */
 	            "%s\n\n", nvram_safe_get("pptpd_custom"));
@@ -318,9 +338,8 @@ void start_pptpd(int force)
 	fclose(fp);
 
 	/* Extract chap-secrets from nvram */
-	write_chap_secret(PPTPD_SECRETS);
-
-	chmod(PPTPD_SECRETS, 0600);
+	if (write_chap_secret(PPTPD_SECRETS) != 0)
+		return;
 
 	build_pptpd_firewall();
 	run_pptpd_firewall_script();

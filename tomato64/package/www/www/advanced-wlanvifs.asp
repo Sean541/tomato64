@@ -178,8 +178,8 @@ wlg.dataToView = function(data) {
 	else
 		ifname = wl_display_ifname(uidx);
 
-	return ([ifname,(data[1] == 1) ? '&#x2b50' : '',
-	                 data[2] || '<small><i>(unset)<\/i><\/small>',
+	return ([escapeHTML(''+ifname),(data[1] == 1) ? '&#x2b50' : '',
+	                 data[2] ? escapeHTML(''+data[2]) : '<small><i>(unset)<\/i><\/small>',
 	                 wmo[data[3]] || '<small><i>(unset)<\/i><\/small>',
 	                 bridgeNames[data[4]],
 	                 macmode[data[5]] || macmode[nvram['wl'+data[0].toString()+'_macmode']]
@@ -454,7 +454,7 @@ function do_pre_submit_form(fom) {
 			if (vif >= 0) {
 				for (var i = 0; i < elem.length ; ++i) {
 					if (elem[i].name.indexOf('wl'+u) == 0)
-						s += 'nvram set '+elem[i].name+'="'+elem[i].value+'"\n';
+						s += 'nvram set '+elem[i].name+'="'+elem[i].value.replace(/["\\$`]/g, '\\$&')+'"\n';
 				}
 			}
 /* REMOVE-BEGIN
@@ -1127,6 +1127,13 @@ REMOVE-END */
 		wmode = E('_f_wl'+u+'_mode').value;
 		sm2 = E('_wl'+u+'_security_mode').value;
 		wradio = E('_f_wl'+u+'_radio').checked;
+
+		/* Also clear disabled inputs: the VIF pre-submit stage reads them. */
+		if (sm2 == 'disabled') {
+			var secrets = ['wpa_psk', 'passphrase', 'key1', 'key2', 'key3', 'key4'];
+			for (var k = 0; k < secrets.length; ++k)
+				E('_wl'+u+'_'+secrets[k]).value = '';
+		}
 
 		if (wmode == 'apwds')
 			E('_wl'+u+'_mode').value = 'ap';

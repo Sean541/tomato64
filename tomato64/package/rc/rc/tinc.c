@@ -110,6 +110,20 @@ static void build_tinc_firewall(const char *port)
  * @param body  shell commands stored in NVRAM
  * @return      1 on success, 0 when the script cannot be created
  */
+static int tinc_valid_port(const char *port)
+{
+	unsigned long value;
+	char *end;
+
+	if (!port || !*port)
+		return 1;
+
+	value = strtoul(port, &end, 10);
+
+	return (*end == '\0') && (value >= 1) && (value <= 65535);
+}
+
+
 static int write_tinc_hook(const char *path, const char *body)
 {
 	FILE *fp;
@@ -139,30 +153,29 @@ void start_tinc(int force)
 	if (serialize_restart("tincd", 1))
 		return;
 
+	if (!str_isalnum_extra(nvram_safe_get("tinc_name"), "_", 1, 0)) {
+		logmsg(LOG_ERR, "Tinc: invalid local host name");
+		return;
+	}
+
 	/* create tinc directories */
 	mkdir(TINC_DIR, 0700);
 	mkdir(TINC_HOSTS, 0700);
 
 	/* write private rsa key */
 	if (strcmp(tinc_tmp_value = nvram_safe_get("tinc_private_rsa"), "") != 0) {
-		if (!(fp = fopen(TINC_RSA_KEY, "w"))) {
+		if (f_write_string(TINC_RSA_KEY, tinc_tmp_value, FW_NEWLINE | FW_CREATE, 0600) < 0) {
 			logerr(__FUNCTION__, __LINE__, TINC_RSA_KEY);
 			return;
 		}
-		fprintf(fp, "%s\n", tinc_tmp_value);
-		fclose(fp);
-		chmod(TINC_RSA_KEY, 0600);
 	}
 
 	/* write private ed25519 key */
 	if (strcmp(tinc_tmp_value = nvram_safe_get("tinc_private_ed25519"), "") != 0) {
-		if (!(fp = fopen(TINC_PRIV_KEY, "w"))) {
+		if (f_write_string(TINC_PRIV_KEY, tinc_tmp_value, FW_NEWLINE | FW_CREATE, 0600) < 0) {
 			logerr(__FUNCTION__, __LINE__, TINC_PRIV_KEY);
 			return;
 		}
-		fprintf(fp, "%s\n", tinc_tmp_value);
-		fclose(fp);
-		chmod(TINC_PRIV_KEY, 0600);
 	}
 
 	/* create tinc.conf */
@@ -191,6 +204,16 @@ void start_tinc(int force)
 
 		if (vstrsep(b, "<", &connecto, &name, &address, &port, &compression, &subnet, &rsa, &ed25519, &custom) < 9)
 			continue;
+
+		if (!str_isalnum_extra(name, "_", 1, 0)) {
+			logmsg(LOG_WARNING, "Tinc: ignoring invalid host name");
+			continue;
+		}
+
+		if (!tinc_valid_port(port)) {
+			logmsg(LOG_WARNING, "Tinc: ignoring host with invalid port");
+			continue;
+		}
 
 		snprintf(buffer, sizeof(buffer), TINC_HOSTS"/%s", name);
 		if (!(hp = fopen(buffer, "w"))) {

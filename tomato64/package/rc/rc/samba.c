@@ -55,8 +55,8 @@ static void start_wsdd(void)
 
 	stop_wsdd();
 
-	if (!ether_atoe(nvram_safe_get("lan_hwaddr"), ea))
-		gen_urandom(NULL, ea, ETHER_ADDR_LEN, 0);
+	if (!ether_atoe(nvram_safe_get("lan_hwaddr"), ea) && !gen_urandom(NULL, ea, ETHER_ADDR_LEN, 0))
+		memset(ea, 0, sizeof(ea));
 
 	snprintf(serial, sizeof(serial), "%02x%02x%02x%02x%02x%02x", ea[0], ea[1], ea[2], ea[3], ea[4], ea[5]);
 
@@ -124,6 +124,8 @@ void start_samba(int force)
 #endif
 #ifdef TOMATO64
 	char cmd[256];
+	char *s, *d;
+	FILE *pw;
 #endif /* TOMATO64 */
 
 	/* only if enabled or forced and lan_hostname is set */
@@ -320,8 +322,15 @@ void start_samba(int force)
 		while ((q = strsep(&p, ">")) != NULL) {
 			if (vstrsep(q, "<", &name, &path, &comment, &writeable, &hidden) < 5)
 				continue;
-			if (!path || !name)
+
+			if (!str_isalnum_extra(name, " _-$", 1, 0) ||
+			    !path || !*path || strpbrk(path, "\r\n") ||
+			    (comment && strpbrk(comment, "\r\n")) ||
+			    (strcmp(writeable, "0") && strcmp(writeable, "1")) ||
+			    (strcmp(hidden, "0") && strcmp(hidden, "1"))) {
+				logmsg(LOG_WARNING, "Samba: ignoring invalid share entry");
 				continue;
+			}
 
 			/* share name */
 			fprintf(fp, "\n[%s]\n", name);
@@ -391,8 +400,26 @@ void start_samba(int force)
 			smbd_user = "nas";
 
 #ifdef TOMATO64
-		snprintf(cmd, sizeof(cmd), "printf \"%s\n%s\n\" | smbpasswd -a -s %s", nvram_safe_get("smbd_passwd"), nvram_safe_get("smbd_passwd"), smbd_user);
-		system(cmd);
+		/* single-quote the user name for the shell, and feed the password on
+		 * stdin so it never passes through the shell or a printf format
+		 */
+		strlcpy(cmd, "smbpasswd -a -s '", sizeof(cmd));
+		for (s = smbd_user, d = cmd + strlen(cmd); *s && (d < cmd + sizeof(cmd) - 6); s++) {
+			if (*s == '\'') {
+				memcpy(d, "'\\''", 4);
+				d += 4;
+			}
+			else
+				*d++ = *s;
+		}
+		strlcpy(d, "'", cmd + sizeof(cmd) - d);
+
+		if ((pw = popen(cmd, "w")) != NULL) {
+			fprintf(pw, "%s\n%s\n", nvram_safe_get("smbd_passwd"), nvram_safe_get("smbd_passwd"));
+			pclose(pw);
+		}
+		else
+			logerr(__FUNCTION__, __LINE__, "smbpasswd");
 #else
 		eval("smbpasswd", smbd_user, nvram_safe_get("smbd_passwd"));
 #endif /* TOMATO64 */

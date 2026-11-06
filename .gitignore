@@ -11,6 +11,7 @@
 .configure-legacy
 .configure-mt6000
 .configure-mt3600be
+.configure-be12pro
 .configure-be14000
 .configure-bpi-r3
 .configure-bpi-r3-mini
@@ -28,3 +29,4 @@ src/
 00001-openwrt-x86_64-kernel-*
 00001-openwrt-bcm53xx-kernel-*
 00001-openwrt-armsr-kernel-*
+tomato64/scripts/tests/divergence-out/

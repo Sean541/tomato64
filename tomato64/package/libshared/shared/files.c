@@ -20,6 +20,9 @@
 #include <bcmnvram.h>
 #include "shutils.h"
 #include "shared.h"
+#ifdef TOMATO64
+#include <limits.h>
+#endif /* TOMATO64 */
 
 
 int f_exists(const char *path) /* note: anything but a directory */
@@ -43,13 +46,35 @@ unsigned long f_size(const char *path) /* 4GB-1   -1 = error */
 
 int f_read(const char *path, void *buffer, int max)
 {
-	int f;
-	int n;
+	int f, n;
+	int total = 0;
 
-	if ((f = open(path, O_RDONLY)) < 0) return -1;
-	n = read(f, buffer, max);
+	if ((max < 0) || (!buffer && max))
+		return -1;
+
+	if ((f = open(path, O_RDONLY)) < 0)
+		return -1;
+
+	while (total < max) {
+		n = read(f, (char *)buffer + total, max - total);
+
+		if (n > 0) {
+			total += n;
+			continue;
+		}
+
+		if (n == 0)
+			break;
+
+		if (errno == EINTR)
+			continue;
+
+		close(f);
+		return -1;
+	}
+
 	close(f);
-	return n;
+	return total;
 }
 
 int f_write(const char *path, const void *buffer, int len, unsigned flags, unsigned cmode)
@@ -129,6 +154,40 @@ int f_write_procsysnet(const char *path, const char *value)
 	snprintf(syspath, sizeof(syspath), "/proc/sys/net/%s", path);
 
 	return f_write_string(syspath, value, 0, 0);
+}
+
+int f_write_quoted(FILE *fp, const char *value, int crlf_mode)
+{
+	const unsigned char *p;
+
+	if (!fp || ((crlf_mode != FWQUOTE_REJECT_CRLF) && (crlf_mode != FWQUOTE_SPACE_CRLF)))
+		return -1;
+
+	if (!value)
+		value = "";
+
+	/* Reject before writing anything so callers never get a partial token. */
+	if ((crlf_mode == FWQUOTE_REJECT_CRLF) && strpbrk(value, "\r\n"))
+		return -1;
+
+	if (fputc('"', fp) == EOF)
+		return -1;
+
+	for (p = (const unsigned char *)value; *p; ++p) {
+		if ((*p == '\\') || (*p == '"')) {
+			if (fputc('\\', fp) == EOF)
+				return -1;
+		}
+
+		if (((*p == '\r') || (*p == '\n')) && (crlf_mode == FWQUOTE_SPACE_CRLF)) {
+			if (fputc(' ', fp) == EOF)
+				return -1;
+		}
+		else if (fputc(*p, fp) == EOF)
+			return -1;
+	}
+
+	return (fputc('"', fp) == EOF) ? -1 : 0;
 }
 
 #if defined(TCONFIG_NGINX) || defined(TCONFIG_BT)
@@ -225,12 +284,16 @@ static int _f_read_alloc(const char *path, char **buffer, int max, int z)
 		if ((n = f_size(path)) != (unsigned long)-1) {
 			if (n < (unsigned int) max) max = n;
 			if ((!z) && (max == 0)) return 0;
-			if ((*buffer = malloc(max + z)) != NULL) {
+			if ((z < 0) || (max > INT_MAX - z))
+				return -1;
+
+			if ((*buffer = malloc((size_t)max + (size_t)z)) != NULL) {
 				if ((max = f_read(path, *buffer, max)) >= 0) {
 					if (z) *(*buffer + max) = 0;
 					return max;
 				}
-				free(buffer);
+				free(*buffer);
+				*buffer = NULL;
 			}
 		}
 	}
@@ -283,14 +346,26 @@ int file_lock(char *tag)
 	char fn[64];
 	struct flock lock;
 	int lockfd = -1;
-	pid_t lockpid;
+	pid_t lockpid = 0;
+	ssize_t n;
 
-	sprintf(fn, "/var/lock/%s.lock", tag);
+	{
+		int n;
+
+		n = snprintf(fn, sizeof(fn), "/var/lock/%s.lock", tag);
+		if ((n < 0) || ((size_t)n >= sizeof(fn)))
+			goto lock_error;
+	}
 	if ((lockfd = open(fn, O_CREAT | O_RDWR, 0666)) < 0)
 		goto lock_error;
 
 	pid_t pid = getpid();
-	if (read(lockfd, &lockpid, sizeof(pid_t))) {
+	n = read(lockfd, &lockpid, sizeof(lockpid));
+	if (n < 0) {
+		close(lockfd);
+		goto lock_error;
+	}
+	if ((size_t)n == sizeof(lockpid)) {
 		/* check if we already hold a lock */
 		if (pid == lockpid) {
 			/* don't close the file here as that will release all locks */
@@ -307,8 +382,11 @@ int file_lock(char *tag)
 		goto lock_error;
 	}
 
-	lseek(lockfd, 0, SEEK_SET);
-	write(lockfd, &pid, sizeof(pid_t));
+	if ((lseek(lockfd, 0, SEEK_SET) < 0) || (ftruncate(lockfd, 0) < 0) || (write(lockfd, &pid, sizeof(pid)) != (ssize_t)sizeof(pid))) {
+		close(lockfd);
+		goto lock_error;
+	}
+
 	return lockfd;
 lock_error:
 	/* No proper error processing */

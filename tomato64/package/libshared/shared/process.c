@@ -25,7 +25,7 @@ static int getpsstate(int pid) {
 	char *p;
 	char *c;
 
-	sprintf(path, "/proc/%d/stat", pid);
+	snprintf(path, sizeof(path), "/proc/%d/stat", pid);
 	if ((f_read_string(path, buf, sizeof(buf)) > 4) && ((p = strrchr(buf, ')')) != NULL)) {
 		c = p + 2;
 		unsigned char state;
@@ -48,7 +48,7 @@ static char *psname_argv0(int pid, char *buffer, int maxlen)
 		return NULL;
 
 	*buffer = 0;
-	sprintf(path, "/proc/%d/cmdline", pid);
+	snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
 	if (f_read_string(path, buf, sizeof(buf)) > 0) {
 		strlcpy(buffer, buf, maxlen);
 	}
@@ -66,7 +66,7 @@ char *psname(int pid, char *buffer, int maxlen)
 		return NULL;
 
 	*buffer = 0;
-	sprintf(path, "/proc/%d/stat", pid);
+	snprintf(path, sizeof(path), "/proc/%d/stat", pid);
 	if ((f_read_string(path, buf, sizeof(buf)) > 4) && ((p = strrchr(buf, ')')) != NULL)) {
 		*p = 0;
 		if (((p = strchr(buf, '(')) != NULL) && (atoi(buf) == pid)) {
@@ -106,7 +106,11 @@ static int _pidof(const char *name, pid_t **pids)
 	if ((p = strrchr(name, '/')) != NULL)
 		altname = p + 1;
 
-	if ((dir = opendir("/proc")) != NULL) {
+	dir = opendir("/proc");
+	if (dir == NULL)
+		return 0;
+
+	{
 		while ((de = readdir(dir)) != NULL) {
 			i = strtol(de->d_name, &e, 10);
 			if (*e != 0)
@@ -114,14 +118,22 @@ static int _pidof(const char *name, pid_t **pids)
 
 			if ((strncmp(altname, psname(i, buf, sizeof(buf)), 15) == 0) || (strncmp(name, psname_argv0(i, buf, sizeof(buf)), 15) == 0)) {
 				if (getpsstate(i) == 'Z') {
+					if (pids) {
+						free(*pids);
+						*pids = NULL;
+					}
 					closedir(dir);
 					return -1;
 				}
 				if (pids) {
-					if ((*pids = realloc(*pids, sizeof(pid_t) * (count + 1))) == NULL) {
+					pid_t *new_pids = realloc(*pids, sizeof(pid_t) * (count + 1));
+					if (new_pids == NULL) {
+						free(*pids);
+						*pids = NULL;
 						closedir(dir);
 						return -1;
 					}
+					*pids = new_pids;
 					(*pids)[count++] = i;
 				}
 				else {
@@ -163,7 +175,7 @@ int ppid(int pid) {
 	int ppid = 0;
 
 	buf[0] = 0;
-	sprintf(path, "/proc/%d/stat", pid);
+	snprintf(path, sizeof(path), "/proc/%d/stat", pid);
 	if ((f_read_string(path, buf, sizeof(buf)) > 4))
 		sscanf(buf, "%*d %*s %*c %d", &ppid);
 

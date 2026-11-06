@@ -65,15 +65,28 @@ int is_ascii_alnum(unsigned char c)
 /* to javascript-safe string */
 char *js_string(const char *s)
 {
+	static const char hex[] = "0123456789abcdef";
 	unsigned char c;
 	char *buffer;
 	char *b;
+	size_t len;
 
-	if ((buffer = malloc((strlen(s) * 4) + 1)) != NULL) {
+	if (!s)
+		return NULL;
+
+	len = strlen(s);
+	if (len > ((size_t)-1 - 1) / 4)
+		return NULL;
+
+	if ((buffer = malloc((len * 4) + 1)) != NULL) {
 		b = buffer;
 		while ((c = *s++) != 0) {
-			if ((c == '"') || (c == '\'') || (c == '\\') || (!isprint(c)))
-				b += sprintf(b, "\\x%02x", c);
+			if ((c == '"') || (c == '\'') || (c == '\\') || (!isprint(c))) {
+				*b++ = '\\';
+				*b++ = 'x';
+				*b++ = hex[c >> 4];
+				*b++ = hex[c & 0x0f];
+			}
 			else
 				*b++ = c;
 		}
@@ -89,12 +102,27 @@ char *html_string(const char *s)
 	unsigned char c;
 	char *buffer;
 	char *b;
+	size_t len;
 
-	if ((buffer = malloc((strlen(s) * 6) + 1)) != NULL) {
+	if (!s)
+		return NULL;
+
+	len = strlen(s);
+	if (len > ((size_t)-1 - 1) / 6)
+		return NULL;
+
+	if ((buffer = malloc((len * 6) + 1)) != NULL) {
 		b = buffer;
 		while ((c = *s++) != 0) {
-			if ((c == '&') || (c == '<') || (c == '>') || (c == '"') || (c == '\'') || (!isprint(c)))
-				b += sprintf(b, "&#%d;", c);
+			if ((c == '&') || (c == '<') || (c == '>') || (c == '"') || (c == '\'') || (!isprint(c))) {
+				int n = snprintf(b, 7, "&#%u;", (unsigned int)c);
+
+				if ((n < 0) || (n >= 7)) {
+					free(buffer);
+					return NULL;
+				}
+				b += n;
+			}
 			else
 				*b++ = c;
 		}
@@ -619,72 +647,13 @@ void asp_etherstates(int argc, char **argv)
 {
 #ifndef TOMATO64
 	FILE *f;
-	char line[128], state[32], router_name[64], ports_var[32], wan_state[16];
-	char *wan_ifname, *ports_str, *tmp;
-	int vport, vport_last, port_num, port_count, router_match;
+	char line[128], state[32], router_name[64], wan_state[16];
+	char prefix[16], tmp_nv[32], wan_labels[MAX_PORT_ID + 1][64];
+	char *tmp;
+	int vport, port_num, port_count, mwan_num, wan_unit, wan_port, display_port;
+	int proto, wan_map_complete;
 	int i, j;
-	static const char ports_disabled[] = "\netherstates = {port0: 'disabled'};\n";
-#ifdef TCONFIG_BCMARM
-	/* ARM routers with WAN on Port 4 */
-	static const char *arm_port4_routers[] = {
-		"Netgear AC1450",
-		"Netgear R6200v2",
-		"Netgear R6250",
-		"Netgear R6300v2",
-		"RT-AC56U",
-		"RT-AC56S",
-		"RT-AC3100",
-		"RT-AC88U",
-		"DIR868L",
-		"EA6200",
-		"EA6350v1",
-		"EA6350v2",
-		"EA6400",
-		"EA6500v2",
-		"EA6700",
-		"R7900",
-		"R8000",
-		NULL
-	};
-#else
-	/* MIPS routers with WAN on Port 4 */
-	static const char *mips_port4_routers[] = {
-		"RT-N10P",
-		"RT-N12 A1",
-		"RT-N12 B1",
-		"RT-N12 C1",
-		"RT-N12 D1",
-		"RT-N12 HP",
-		"RT-N15U",
-		"RT-N53",
-		"RT-N53 A1",
-		"Share Max N300 (F7D3301/F7D7301) v1",
-		"Play Max / N600 HD (F7D4301/F7D8301) v1",
-		"WNDR3400",
-		"WNDR3400v2",
-		"WNDR3400v3",
-		"R6300 V1",
-		"Share N300 (F7D3302/F7D7302) v1",
-		"Play N600 (F7D4302/F7D8302) v1",
-		"N600 DB Wireless N+",
-		"Dir-620 C1",
-		"E800 v1.0",
-		"E900 v1.0",
-		"E1200 v1.0",
-		"E1200 v2.0",
-		"E1500 v1.0",
-		"E1550 v1.0",
-		"E2500 v1.0",
-		"E2500 v1/v2/v3",
-		"E3200 v1.0",
-		"E4200 v1",
-		"WNDR3700v3",
-		"WNDR4000",
-		"WNDR4500 V1",
-		"WNDR4500 V2",
-		NULL
-	};
-#endif
+	static const char ports_disabled[] = "\netherstates = {port0: 'disabled'};\netherwans = null;\n";
 	/* port state storage */
 	typedef struct {
 		int port_num;
@@ -694,18 +663,12 @@ void asp_etherstates(int argc, char **argv)
 	port_state_t ports[16];
 	port_state_t temp;
 
-	/* variables for port parsing */
-	char *ports_copy;
-	char *token, *last_token;
-	char *saveptr;
-
 	/* initialize variables */
-	last_token = NULL;
-	vport = 0;
-	vport_last = 0;
+	vport = get_default_wan_phy_port();
 	port_count = 0;
-	router_match = 0;
+	wan_map_complete = 1;
 	memset(wan_state, 0, sizeof(wan_state));
+	memset(wan_labels, 0, sizeof(wan_labels));
 
 	if (!nvram_match("lan_state", "1")) {
 		web_puts(ports_disabled);
@@ -717,61 +680,6 @@ void asp_etherstates(int argc, char **argv)
 	memset(router_name, 0, sizeof(router_name));
 	strlcpy(router_name, tmp, sizeof(router_name));
 
-	/* get WAN interface name */
-	wan_ifname = nvram_safe_get("wan_ifname");
-
-	/* build nvram variable name for ports */
-	memset(ports_var, 0, sizeof(ports_var));
-	snprintf(ports_var, sizeof(ports_var), "%sports", wan_ifname);
-	ports_str = nvram_safe_get(ports_var);
-
-	/* parse VPORT (first port number) and VPORTLAST (last port number) */
-	if (ports_str && strlen(ports_str) > 0) {
-		ports_copy = strdup(ports_str);
-
-		/* Get first port */
-		token = strtok_r(ports_copy, " \t", &saveptr);
-		if (token) {
-			while (*token && !isdigit(*token))
-				token++;
-
-			if (*token)
-				vport = atoi(token);
-
-			last_token = token;
-		}
-
-		/* get last port */
-		while ((token = strtok_r(NULL, " \t", &saveptr)) != NULL) {
-			last_token = token;
-		}
-		if (last_token) {
-			while (*last_token && !isdigit(*last_token))
-				last_token++;
-
-			if (*last_token)
-				vport_last = atoi(last_token);
-		}
-
-		free(ports_copy);
-	}
-
-	/* determine WAN port based on router model if VPORTLAST == VPORT */
-	if ((vport_last == vport) || (vport_last == 0)) {
-		/* check if router uses Port 4 for WAN */
-#ifdef TCONFIG_BCMARM
-		for (i = 0; arm_port4_routers[i] != NULL; i++) {
-			if (strcmp(router_name, arm_port4_routers[i]) == 0) {
-#else
-		for (i = 0; mips_port4_routers[i] != NULL; i++) {
-			if (strcmp(router_name, mips_port4_routers[i]) == 0) {
-#endif
-				router_match = 1;
-				break;
-			}
-		}
-		vport = router_match ? 4 : 0;
-	}
 
 	/* execute robocfg and parse output */
 	if (!(f = popen("robocfg showports 2>/dev/null", "r"))) {
@@ -874,6 +782,72 @@ void asp_etherstates(int argc, char **argv)
 		j++;
 	}
 
+	web_puts("};\n");
+
+	/*
+	 * Map wired WANs onto fixed physical display slots, independent of
+	 * WAN0 and VLAN reassignment. An empty object means no wired WAN is
+	 * active; null means an active wired WAN could not be mapped.
+	 */
+	mwan_num = nvram_get_int("mwan_num");
+	if ((mwan_num < 1) || (mwan_num > MWAN_MAX))
+		mwan_num = 1;
+
+	for (wan_unit = 1; wan_unit <= mwan_num; ++wan_unit) {
+		get_wan_prefix(wan_unit, prefix, sizeof(prefix));
+		proto = get_wanx_proto(prefix);
+
+		if ((proto == WP_DISABLED) || (proto == WP_LTE) || (proto == WP_PPP3G))
+			continue;
+
+		/* A wireless-client WAN has no physical Ethernet switch port. */
+		if (*prefix_nvram_get(prefix, "sta", tmp_nv, sizeof(tmp_nv)))
+			continue;
+
+		wan_port = get_wan_phy_port(prefix);
+		if (wan_port < 0) {
+			wan_map_complete = 0;
+			break;
+		}
+
+		display_port = -1;
+		if (wan_port == vport)
+			display_port = 0;
+		else {
+			for (i = 0; i < port_count; ++i) {
+				if (ports[i].port_num == wan_port) {
+					display_port = i + 1;
+					break;
+				}
+			}
+		}
+
+		if ((display_port < 0) || (display_port > MAX_PORT_ID)) {
+			wan_map_complete = 0;
+			break;
+		}
+
+		if (wan_labels[display_port][0] != '\0')
+			strlcat(wan_labels[display_port], "/", sizeof(wan_labels[display_port]));
+
+		snprintf(line, sizeof(line), "WAN%d", wan_unit - 1);
+		strlcat(wan_labels[display_port], line, sizeof(wan_labels[display_port]));
+	}
+
+	if (!wan_map_complete) {
+		web_puts("etherwans = null;\n");
+		return;
+	}
+
+	web_puts("etherwans = {");
+	j = 0;
+	for (i = 0; i <= MAX_PORT_ID; ++i) {
+		if (wan_labels[i][0] == '\0')
+			continue;
+
+		web_printf("%sport%d: '%s'", j ? "," : "", i, wan_labels[i]);
+		j++;
+	}
 	web_puts("};\n");
 #else /* TOMATO64 */
 	char path[64];
@@ -1520,7 +1494,7 @@ int resolve_addr(const char *ip, char *host)
 void wo_resolve(char *url)
 {
 	char host[NI_MAXHOST];
-	char *p, *ip, *js;
+	char *p, *ip, *js, *js_ip;
 	char comma;
 
 	comma = ' ';
@@ -1530,8 +1504,10 @@ void wo_resolve(char *url)
 			if (resolve_addr(ip, host) != 0)
 				continue;
 
+			js_ip = js_string(ip);
 			js = js_string(host);
-			web_printf("%c['%s','%s']", comma, ip, js);
+			web_printf("%c['%s','%s']", comma, js_ip ? js_ip : "", js ? js : "");
+			free(js_ip);
 			free(js);
 			comma = ',';
 		}

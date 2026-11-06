@@ -365,7 +365,7 @@ struct nvram_tuple bsd_defaults[] = {
 
 #ifdef TOMATO64
 /* Default WiFi mode per device (WiFi 7 hardware defaults to "be", others to "ax") */
-#if defined(TOMATO64_MT3600BE) || defined(TOMATO64_BE14000)
+#if defined(TOMATO64_MT3600BE) || defined(TOMATO64_BE12PRO) || defined(TOMATO64_BE14000)
 #define WIFI_DEFAULT_MODE	"be"
 #else
 #define WIFI_DEFAULT_MODE	"ax"
@@ -2177,6 +2177,9 @@ struct nvram_tuple router_defaults[] = {
 #ifdef TOMATO64_MT3600BE
 	{ "lan_ifnames",		"eth1"				},
 #endif /* TOMATO64_MT3600BE */
+#ifdef TOMATO64_BE12PRO
+	{ "lan_ifnames",		"eth1 eth2 eth3 eth4"		},
+#endif /* TOMATO64_BE12PRO */
 #ifdef TOMATO64_BE14000
 	{ "lan_ifnames",		"eth0 eth2 eth3 eth4 eth5 eth6 eth7 eth8 eth9"	},
 #endif /* TOMATO64_BE14000 */
@@ -2222,6 +2225,9 @@ struct nvram_tuple router_defaults[] = {
 #ifdef TOMATO64_MT3600BE
 	{ "vlan1ports",			"1 9*"				},
 #endif /* TOMATO64_MT3600BE */
+#ifdef TOMATO64_BE12PRO
+	{ "vlan1ports",			"1 2 3 4 9*"			},
+#endif /* TOMATO64_BE12PRO */
 #ifdef TOMATO64_BE14000
 	{ "vlan1ports",			"0 2 3 4 5 6 7 8 9 10*"		},
 #endif /* TOMATO64_BE14000 */
@@ -2275,6 +2281,8 @@ struct nvram_tuple router_defaults[] = {
 	{"wifi_phy_count_expected",	"2"				},	/* MT6000: 2.4GHz + 5GHz */
 #elif defined(TOMATO64_MT3600BE)
 	{"wifi_phy_count_expected",	"2"				},	/* MT3600BE: MT7990 2.4GHz + 5GHz */
+#elif defined(TOMATO64_BE12PRO)
+	{"wifi_phy_count_expected",	"2"				},	/* BE12 Pro: MT7992 2.4GHz + 5GHz */
 #elif defined(TOMATO64_BE14000)
 	{"wifi_phy_count_expected",	"3"				},	/* BE14000: MT7996 2.4GHz + 5GHz + 6GHz */
 #elif defined(TOMATO64_BPIR3)
@@ -2303,7 +2311,7 @@ struct nvram_tuple router_defaults[] = {
 	WIFI_DEF_PHY_BLOCK(0, "2g", "20")
 
 	/* phy0iface0: special defaults (enabled on certain devices, Tomato64 SSID set) */
-#if defined(TOMATO64_MT6000) || defined(TOMATO64_MT3600BE) || defined(TOMATO64_BE14000) || defined(TOMATO64_BPIR3) || defined(TOMATO64_BPIR3MINI)
+#if defined(TOMATO64_MT6000) || defined(TOMATO64_MT3600BE) || defined(TOMATO64_BE12PRO) || defined(TOMATO64_BE14000) || defined(TOMATO64_BPIR3) || defined(TOMATO64_BPIR3MINI)
 	{"wifi_phy0iface0_enable",	"1"				},
 #else
 	{"wifi_phy0iface0_enable",	"0"				},
@@ -2401,7 +2409,7 @@ struct nvram_tuple router_defaults[] = {
 
 /* Translates from, for example, wl0_ (or wl0.1_) to wl_ */
 /* Only single digits are currently supported */
-static void fix_name(const char *name, char *fixed_name)
+static void fix_name(const char *name, char *fixed_name, size_t fixed_len)
 {
 	char *pSuffix = NULL;
 
@@ -2411,14 +2419,14 @@ static void fix_name(const char *name, char *fixed_name)
 	 */
 	pSuffix = strchr(name, '_');
 
-	if ((strncmp(name, "wl", 2) == 0) && isdigit(name[2]) && (pSuffix != NULL)) {
-		strcpy(fixed_name, "wl");
-		strcpy(&fixed_name[2], pSuffix);
+	if ((strncmp(name, "wl", 2) == 0) && isdigit((unsigned char)name[2]) && (pSuffix != NULL)) {
+		strlcpy(fixed_name, "wl", fixed_len);
+		strlcat(fixed_name, pSuffix, fixed_len);
 		return;
 	}
 
 	/* No match with above rules: default to input name */
-	strcpy(fixed_name, name);
+	strlcpy(fixed_name, name, fixed_len);
 }
 
 /*
@@ -2434,7 +2442,7 @@ char *nvram_default_get(const char *name)
 	int idx;
 	char fixed_name[NVRAM_MAX_VALUE_LEN];
 
-	fix_name(name, fixed_name);
+	fix_name(name, fixed_name, sizeof(fixed_name));
 	if (strcmp(fixed_name, "wl_bss_enabled") == 0) {
 		if (name[3] == '.' || name[4] == '.') { /* Virtual interface */
 			return "0";

@@ -52,7 +52,7 @@ static void prep_qosstr(char *prefix)
 	char buf[8];
 
 	for (i = 1; i <= MWAN_MAX; i++) {
-		get_wan_prefix(i, buf);
+		get_wan_prefix(i, buf, sizeof(buf));
 		if (!strcmp(prefix, buf)) {
 			snprintf(buf, sizeof(buf), (i == 1 ? "/etc/wan_qos" : "/etc/wan%d_qos"), i);
 			strlcpy(qosfn, buf, sizeof(qosfn));
@@ -495,7 +495,8 @@ void ipt_qos(void)
 #ifdef TCONFIG_BCMARM
 	if (!nvram_get_int("qos_classify")) {
 		disabled_classification_rates = build_disabled_classification_rates(MWAN_MAX);
-		g = buf = strdup(disabled_classification_rates);
+		g = buf = disabled_classification_rates ? strdup(disabled_classification_rates) : NULL;
+		free(disabled_classification_rates);
 	}
 	else
 #endif
@@ -770,7 +771,8 @@ void start_qos(char *prefix)
 #ifdef TCONFIG_BCMARM
 	if (!nvram_get_int("qos_classify")) {
 		disabled_classification_rates = build_disabled_classification_rates(MWAN_MAX);
-		g = buf = strdup(disabled_classification_rates);
+		g = buf = disabled_classification_rates ? strdup(disabled_classification_rates) : NULL;
+		free(disabled_classification_rates);
 	}
 	else
 #endif
@@ -874,7 +876,8 @@ void start_qos(char *prefix)
 #ifdef TCONFIG_BCMARM
 	if (!nvram_get_int("qos_classify")) {
 		disabled_classification_rates = build_disabled_classification_rates(MWAN_MAX);
-		g = buf = strdup(disabled_classification_rates);
+		g = buf = disabled_classification_rates ? strdup(disabled_classification_rates) : NULL;
+		free(disabled_classification_rates);
 	}
 	else
 #endif

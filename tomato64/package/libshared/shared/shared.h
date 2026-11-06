@@ -13,9 +13,11 @@
 
 #ifdef TOMATO64
 #include <typedefs.h>
+#include <stdio.h>	/* FILE in f_write_escaped(); otherwise only pulled in by <mntent.h> under TCONFIG_USB */
 #endif /* TOMATO64 */
 #include <netinet/in.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <errno.h>
 #include <syslog.h>
 #include <net/if.h>
@@ -195,7 +197,7 @@ extern void get_bridge_suffix(unsigned int bridge, char *suffix, const size_t su
 extern void get_bridge_prefix(unsigned int bridge, char *prefix, const size_t prefix_size);
 extern void get_bridge_nvram_key(unsigned int bridge, const char *suffix, char *key, const size_t key_size);
 extern char *bridge_nvram_get(unsigned int bridge, const char *suffix, char *key, const size_t key_size);
-extern void get_wan_prefix(int iWan_unit, char *sPrefix);
+extern void get_wan_prefix(int iWan_unit, char *sPrefix, size_t prefix_size);
 extern char *wan_nvram_get(int wan_unit, const char *suffix, char *key, const size_t key_size);
 extern int get_wan_unit(const char *sPrefix);
 extern int get_wan_unit_with_value(const char *suffix, const char *value);
@@ -213,6 +215,9 @@ extern int using_dhcpc(char *prefix);
 extern void notice_set(const char *path, const char *format, ...);
 extern int wan_led(int mode);
 extern int wan_led_off(char *prefix);
+extern int get_default_wan_phy_port(void);
+extern int get_wan_phy_port(char *prefix);
+extern int wan_phy_link(char *prefix);
 extern int check_wanup(char *prefix);
 extern long check_wanup_time(char *prefix);
 extern const dns_list_t *get_dns(char *prefix);
@@ -246,7 +251,7 @@ extern void nvram_commit_x(void);
 extern char *getNVRAMVar(const char *text, const int unit);
 extern int mtd_getinfo(const char *mtdname, int *part, int *size);
 extern int foreach_wif(int include_vifs, void *param, int (*func)(int idx, int unit, int subunit, void *param));
-extern void gen_urandom(char *buf1, unsigned char *buf2, size_t buf_sz, const unsigned int addtid);
+extern int gen_urandom(char *buf1, unsigned char *buf2, size_t buf_sz, const unsigned int addtid);
 
 /* usb.c */
 #ifdef TCONFIG_USB
@@ -554,6 +559,9 @@ extern int ppid(int pid);
 #define FW_CREATE		0
 #define FW_APPEND		1
 #define FW_NEWLINE		2
+
+#define FWQUOTE_REJECT_CRLF	0
+#define FWQUOTE_SPACE_CRLF	1
 #if defined(TCONFIG_NGINX) || defined(TCONFIG_BT)
 #define FWESC_JSON		1
 #define FWESC_LINE		2
@@ -566,6 +574,7 @@ extern int f_write(const char *file, const void *buffer, int len, unsigned flags
 extern int f_read_string(const char *file, char *buffer, int max); /* returns bytes read, not including term; max includes term */
 extern int f_write_string(const char *file, const char *buffer, unsigned flags, unsigned cmode);
 extern int f_write_procsysnet(const char *path, const char *value);
+extern int f_write_quoted(FILE *fp, const char *value, int crlf_mode);
 #if defined(TCONFIG_NGINX) || defined(TCONFIG_BT)
 extern int f_write_escaped(FILE *fp, int mode, const char *s1, const char *s2);
 #endif
@@ -705,7 +714,9 @@ extern int is_port(char *str);
 extern char *filter_space(char *str);
 extern char* format_port(char *str);
 extern char* trimstr(char *str);
-extern char* splitpath( char *str, char *pathname, char *filename);
+#ifdef TCONFIG_NGINX
+ extern char *splitpath(char *str, char *pathname, size_t pathlen, char *filename, size_t filelen);
+#endif /* TCONFIG_NGINX */
 extern int splitport(char *in_ports, char out_port[MAX_PORTS][PORT_SIZE]);
 extern int is_number(char *a);
 extern int isspacex(char c);

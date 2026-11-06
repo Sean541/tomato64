@@ -439,14 +439,37 @@ static void load_new(void)
 	unlink(hgz);
 }
 
+#ifdef TOMATO64
+/*
+ * /cifs1 and /cifs2 exist in the root filesystem whether or not the share
+ * is mounted. With a writable root an unmounted one passes the writable
+ * directory test, so a new history would be written under the mount point
+ * and later saved over the real one on the share. Treat it as not ready
+ * until something is mounted there.
+ */
+static int unmounted_cifs_dir(const char *dir)
+{
+	struct stat st_dir, st_root;
+
+	if (strcmp(dir, "/cifs1") && strcmp(dir, "/cifs2"))
+		return 0;
+
+	if ((stat(dir, &st_dir) != 0) || (stat("/", &st_root) != 0))
+		return 1;
+
+	return (st_dir.st_dev == st_root.st_dev);
+}
+#endif /* TOMATO64 */
+
 static void load(int new)
 {
 	int i, n;
 	int speed_loaded;
 	long t;
-	char *bi, *bo;
+	char *bi, *bo, *slash;
 	char hgz[256], speed_hgz[256];
-	char sp[sizeof(save_path)];
+	char sp[sizeof(save_path)], parent[sizeof(save_path)];
+	struct stat st;
 	unsigned char mac[6];
 
 	uptime = get_uptime();
@@ -560,6 +583,32 @@ static void load(int new)
 					if (load_history(save_path) || try_hardway(save_path, 0)) {
 						f_write_string(source_fn, save_path, 0, 0);
 						break;
+					}
+
+					/*
+					 * A missing history file at an otherwise valid writable
+					 * location is a normal first-run condition. Existing but
+					 * unreadable/corrupt files stay on the recovery path above.
+					 */
+					if (!f_exists(save_path)) {
+						strlcpy(parent, save_path, sizeof(parent));
+						slash = strrchr(parent, '/');
+
+						if (slash != NULL) {
+							if (slash == parent)
+								slash[1] = '\0';
+							else
+								*slash = '\0';
+
+#ifdef TOMATO64
+							if (!unmounted_cifs_dir(parent))
+#endif /* TOMATO64 */
+							if ((stat(parent, &st) == 0) && S_ISDIR(st.st_mode) && (access(parent, W_OK) == 0)) {
+								logmsg(LOG_INFO, "History file %s does not exist; creating a new one", save_path);
+								save_utime = 0;
+								return;
+							}
+						}
 					}
 				}
 
@@ -788,7 +837,7 @@ static void calc(void)
 
 			logmsg(LOG_DEBUG, "*** %s: mapped ifname %s to wan unit %d", __FUNCTION__, ifname, sp_rtd->wan_unit);
 		}
-		get_wan_prefix(sp_rtd->wan_unit, prefix); /* Note this will default to 'wan' for anything but the primary interface for wanXX */
+		get_wan_prefix(sp_rtd->wan_unit, prefix, sizeof(prefix)); /* Note this will default to 'wan' for anything but the primary interface for wanXX */
 
 		if (sp->sync) {
 			logmsg(LOG_DEBUG, "*** %s: sync %s", __FUNCTION__, ifname);

@@ -204,19 +204,19 @@ int ipt_addr(char *addr, int maxlen, const char *s, const char *dir, int af, int
 	int r = 0;
 
 	if ((s) && (*s) && (*dir)) {
-		if (sscanf(s, "%[0-9.]-%[0-9.]", p, p) == 2) {
+		if (sscanf(s, "%91[0-9.]-%91[0-9.]", p, p) == 2) {
 			snprintf(addr, maxlen, "-m iprange --%s-range %s", dir, s);
 			r = IPT_V4;
 		}
 #ifdef TCONFIG_IPV6
-		else if (sscanf(s, "%[0-9A-Fa-f:]-%[0-9A-Fa-f:]", p, p) == 2) {
+		else if (sscanf(s, "%91[0-9A-Fa-f:]-%91[0-9A-Fa-f:]", p, p) == 2) {
 			snprintf(addr, maxlen, "-m iprange --%s-range %s", dir, s);
 			r = IPT_V6;
 		}
 #endif
 		else {
 			snprintf(addr, maxlen, "-%c %s", dir[0], s);
-			if (sscanf(s, "%[^/]/", p)) {
+			if (sscanf(s, "%91[^/]/", p)) {
 #ifdef TCONFIG_IPV6
 				r = host_addrtypes(p, strict ? af : (IPT_V4 | IPT_V6));
 #else
@@ -966,6 +966,9 @@ static void raw_table(void)
 	if (!nvram_match("nf_pptp", "0"))
 		ipt_write("-A PREROUTING -p tcp -m tcp --dport 1723 -j CT --helper pptp\n");
 
+	/* Always attach the pptp helper to the router's own PPTP (WAN, PPTP client) */
+	ipt_write("-A OUTPUT -p tcp -m tcp --dport 1723 -j CT --helper pptp\n");
+
 	if (!nvram_match("nf_sip", "0"))
 		ipt_write("-A PREROUTING -p udp -m udp --dport 5060 -j CT --helper sip\n");
 
@@ -1340,7 +1343,7 @@ static void nat_table(void)
 #endif
 
 	for (j = 1; j <= mwan_count; j++) {
-		get_wan_prefix(j, name);
+		get_wan_prefix(j, name, sizeof(name));
 		proto = get_wanx_proto(name);
 		if ((proto != WP_PPPOE) && (proto != WP_DHCP) && (proto != WP_STATIC))
 			continue;
@@ -1517,7 +1520,7 @@ static void filter_input(void)
 	 */
 	if (nvram_invmatch("wan_dhcp_pass", "0")) {
 		for (mwan = 1; mwan <= mwan_count; mwan++) {
-			get_wan_prefix(mwan, buf);
+			get_wan_prefix(mwan, buf, sizeof(buf));
 			if (using_dhcpc(buf)) {
 				ipt_write("-A INPUT -p udp --sport 67 --dport 68 -j %s\n", chain_in_accept);
 				break;
@@ -2097,7 +2100,7 @@ int start_firewall(void)
 	memset(wanfaces, 0, sizeof(wanfaces));
 
 	for (mwan = 1; mwan <= mwan_count; mwan++) {
-		get_wan_prefix(mwan, s);
+		get_wan_prefix(mwan, s, sizeof(s));
 		wanup[mwan - 1] = check_wanup(s);
 	}
 
@@ -2223,7 +2226,7 @@ int start_firewall(void)
 	}
 
 	for (mwan = 1; mwan <= mwan_count; mwan++) {
-		get_wan_prefix(mwan, buf);
+		get_wan_prefix(mwan, buf, sizeof(buf));
 		memcpy(&wanfaces[mwan - 1], get_wanfaces(buf), sizeof(wanfaces[mwan - 1]));
 		wanface[mwan - 1] = wanfaces[mwan - 1].iface[0].name;
 	}

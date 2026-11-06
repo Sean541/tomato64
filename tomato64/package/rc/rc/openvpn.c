@@ -61,6 +61,22 @@ typedef enum ovpn_type
  * early ACCEPT rules. No -j target is used intentionally: the account match
  * updates counters and packet evaluation continues.
  */
+#ifndef TCONFIG_OPTIMIZE_SIZE_MORE
+static int ovpn_valid_ipv4_route(const char *route)
+{
+	char network[INET_ADDRSTRLEN], netmask[INET_ADDRSTRLEN], extra;
+	struct in_addr addr;
+
+	if (!route || strpbrk(route, "\r\n"))
+		return 0;
+
+	if (sscanf(route, "%15s %15s %c", network, netmask, &extra) != 2)
+		return 0;
+
+	return (inet_pton(AF_INET, network, &addr) == 1) && (inet_pton(AF_INET, netmask, &addr) == 1);
+}
+#endif
+
 static void write_ovpn_cstats_rules(FILE *fp, const char *iface, const char *dir)
 {
 	struct in_addr ipaddr, netmask, network;
@@ -200,6 +216,14 @@ static void ovpn_setup_watchdog(ovpn_type_t type, const int unit)
 
 		val = getNVRAMVar("vpnc%d_tunchk", unit);
 		ipchk = (val && *val) ? val : nvram_safe_get("wan_checker");
+		{
+			struct in_addr addr;
+
+			if (inet_pton(AF_INET, ipchk, &addr) != 1) {
+				logmsg(LOG_WARNING, "%s: invalid tunnel check address '%s', using 1.0.0.1", __FUNCTION__, ipchk ? ipchk : "");
+				ipchk = "1.0.0.1";
+			}
+		}
 
 		if ((fp = fopen(buffer, "w"))) {
 			fprintf(fp, "#!/bin/sh\n"
@@ -455,7 +479,14 @@ void start_ovpn_client(int unit)
 			fprintf(fp, "remote-cert-tls server\n");
 
 		if ((nvi = atoi(getNVRAMVar("vpnc%d_tlsvername", unit))) > 0) {
-			fprintf(fp, "verify-x509-name \"%s\" ", getNVRAMVar("vpnc%d_cn", unit));
+			fprintf(fp, "verify-x509-name ");
+			if (f_write_quoted(fp, getNVRAMVar("vpnc%d_cn", unit), FWQUOTE_REJECT_CRLF) < 0) {
+				logmsg(LOG_ERR, "invalid verify-x509-name value");
+				fclose(fp);
+				stop_ovpn_client(unit);
+				return;
+			}
+			fprintf(fp, " ");
 			if (nvi == 2)
 				fprintf(fp, "name-prefix\n");
 			else if (nvi == 3)
@@ -488,44 +519,41 @@ void start_ovpn_client(int unit)
 		snprintf(buffer, BUF_SIZE, "vpnc%d_ca", unit);
 		if (!nvram_is_empty(buffer)) {
 			snprintf(buffer, BUF_SIZE, OVPN_DIR"/client%d/ca.crt", unit);
-			if (!(fp = fopen(buffer, "w"))) {
-				logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+			if (f_write_string(buffer, getNVRAMVar("vpnc%d_ca", unit), FW_CREATE, 0600) < 0) {
+				logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 				stop_ovpn_client(unit);
 				return;
 			}
-			chmod(buffer, (S_IRUSR | S_IWUSR));
-			fprintf(fp, "%s", getNVRAMVar("vpnc%d_ca", unit));
-			fclose(fp);
 		}
 
 		if (!useronly) {
 			snprintf(buffer, BUF_SIZE, "vpnc%d_key", unit);
 			if (!nvram_is_empty(buffer)) {
 				snprintf(buffer, BUF_SIZE, OVPN_DIR"/client%d/client.key", unit);
-				if (!(fp = fopen(buffer, "w"))) {
-					logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+				if (f_write_string(buffer, getNVRAMVar("vpnc%d_key", unit), FW_CREATE, 0600) < 0) {
+					logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 					stop_ovpn_client(unit);
 					return;
 				}
-				chmod(buffer, (S_IRUSR | S_IWUSR));
-				fprintf(fp, "%s", getNVRAMVar("vpnc%d_key", unit));
-				fclose(fp);
 			}
 
 			snprintf(buffer, BUF_SIZE, "vpnc%d_crt", unit);
 			if (!nvram_is_empty(buffer)) {
 				snprintf(buffer, BUF_SIZE, OVPN_DIR"/client%d/client.crt", unit);
-				if (!(fp = fopen(buffer, "w"))) {
-					logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+				if (f_write_string(buffer, getNVRAMVar("vpnc%d_crt", unit), FW_CREATE, 0600) < 0) {
+					logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 					stop_ovpn_client(unit);
 					return;
 				}
-				chmod(buffer, (S_IRUSR | S_IWUSR));
-				fprintf(fp, "%s", getNVRAMVar("vpnc%d_crt", unit));
-				fclose(fp);
 			}
 		}
 		if (userauth) {
+			if (!str_is_single_line(getNVRAMVar("vpnc%d_username", unit)) || !str_is_single_line(getNVRAMVar("vpnc%d_password", unit))) {
+				logmsg(LOG_ERR, "invalid OpenVPN username or password");
+				stop_ovpn_client(unit);
+				return;
+			}
+
 			snprintf(buffer, BUF_SIZE, OVPN_DIR"/client%d/up", unit);
 			if (!(fp = fopen(buffer, "w"))) {
 				logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
@@ -543,14 +571,11 @@ void start_ovpn_client(int unit)
 		snprintf(buffer, BUF_SIZE, "vpnc%d_static", unit);
 		if (!nvram_is_empty(buffer)) {
 			snprintf(buffer, BUF_SIZE, OVPN_DIR"/client%d/static.key", unit);
-			if (!(fp = fopen(buffer, "w"))) {
-				logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+			if (f_write_string(buffer, getNVRAMVar("vpnc%d_static", unit), FW_CREATE, 0600) < 0) {
+				logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 				stop_ovpn_client(unit);
 				return;
 			}
-			chmod(buffer, (S_IRUSR | S_IWUSR));
-			fprintf(fp, "%s", getNVRAMVar("vpnc%d_static", unit));
-			fclose(fp);
 		}
 	}
 
@@ -973,12 +998,17 @@ void start_ovpn_server(int unit)
 					if (nvi > 0) {
 						chp[strcspn(chp, "<")] = '\0';
 						logmsg(LOG_DEBUG, "*** %s: CCD: Common name: %s", __FUNCTION__, chp);
-						if (!(ccd = fopen(chp, "a"))) {
-							logmsg(LOG_ERR, "failed to create %s: (%s)", chp, strerror(errno));
-							stop_ovpn_server(unit);
-							return;
+						if (strchr(chp, '/')) {
+							logmsg(LOG_ERR, "invalid CCD common name containing path separator: %s", chp);
 						}
-						chmod(chp, (S_IRUSR | S_IWUSR));
+						else {
+							if (!(ccd = fopen(chp, "a"))) {
+								logmsg(LOG_ERR, "failed to create %s: (%s)", chp, strerror(errno));
+								stop_ovpn_server(unit);
+								return;
+							}
+							chmod(chp, (S_IRUSR | S_IWUSR));
+						}
 
 						nvi -= strlen(chp) + 1;
 						chp += strlen(chp) + 1;
@@ -989,8 +1019,14 @@ void start_ovpn_server(int unit)
 						route = chp;
 						logmsg(LOG_DEBUG, "*** %s: CCD: Route: %s", __FUNCTION__, chp);
 						if (strlen(route) > 1) {
-							fprintf(ccd, "iroute %s\n", route);
-							fprintf(fp, "route %s\n", route);
+							if (!ovpn_valid_ipv4_route(route)) {
+								logmsg(LOG_WARNING, "OpenVPN server %d: ignoring invalid CCD route", unit);
+								route = NULL;
+							}
+							else {
+								fprintf(ccd, "iroute %s\n", route);
+								fprintf(fp, "route %s\n", route);
+							}
 						}
 
 						nvi -= strlen(chp) + 1;
@@ -1029,8 +1065,15 @@ void start_ovpn_server(int unit)
 		}
 
 		if (atoi(getNVRAMVar("vpns%d_pdns", unit))) {
-			if (nvram_safe_get("wan_domain")[0] != '\0')
-				fprintf(fp, "push \"dhcp-option DOMAIN %s\"\n", nvram_safe_get("wan_domain"));
+			const char *wan_domain = nvram_safe_get("wan_domain");
+
+			if (wan_domain[0] != '\0') {
+				if (strpbrk(wan_domain, "\"\\\r\n")) {
+					logmsg(LOG_WARNING, "OpenVPN server %d: ignoring unsafe wan_domain", unit);
+				}
+				else
+					fprintf(fp, "push \"dhcp-option DOMAIN %s\"\n", wan_domain);
+			}
 			if ((nvram_safe_get("wan_wins")[0] != '\0' && strcmp(nvram_safe_get("wan_wins"), "0.0.0.0") != 0))
 				fprintf(fp, "push \"dhcp-option WINS %s\"\n", nvram_safe_get("wan_wins"));
 
@@ -1119,66 +1162,51 @@ void start_ovpn_server(int unit)
 		snprintf(buffer, BUF_SIZE, "vpns%d_ca", unit);
 		if (!nvram_is_empty(buffer)) {
 			snprintf(buffer, BUF_SIZE, OVPN_DIR"/server%d/ca.crt", unit);
-			if (!(fp = fopen(buffer, "w"))) {
-				logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+			if (f_write_string(buffer, getNVRAMVar("vpns%d_ca", unit), FW_CREATE, 0600) < 0) {
+				logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 				stop_ovpn_server(unit);
 				return;
 			}
-			chmod(buffer, (S_IRUSR | S_IWUSR));
-			fprintf(fp, "%s", getNVRAMVar("vpns%d_ca", unit));
-			fclose(fp);
 		}
 
 		snprintf(buffer, BUF_SIZE, "vpns%d_key", unit);
 		if (!nvram_is_empty(buffer)) {
 			snprintf(buffer, BUF_SIZE, OVPN_DIR"/server%d/server.key", unit);
-			if (!(fp = fopen(buffer, "w"))) {
-				logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+			if (f_write_string(buffer, getNVRAMVar("vpns%d_key", unit), FW_CREATE, 0600) < 0) {
+				logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 				stop_ovpn_server(unit);
 				return;
 			}
-			chmod(buffer, (S_IRUSR | S_IWUSR));
-			fprintf(fp, "%s", getNVRAMVar("vpns%d_key", unit));
-			fclose(fp);
 		}
 
 		snprintf(buffer, BUF_SIZE, "vpns%d_crt", unit);
 		if (!nvram_is_empty(buffer)) {
 			snprintf(buffer, BUF_SIZE, OVPN_DIR"/server%d/server.crt", unit);
-			if (!(fp = fopen(buffer, "w"))) {
-				logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+			if (f_write_string(buffer, getNVRAMVar("vpns%d_crt", unit), FW_CREATE, 0600) < 0) {
+				logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 				stop_ovpn_server(unit);
 				return;
 			}
-			chmod(buffer, (S_IRUSR | S_IWUSR));
-			fprintf(fp, "%s", getNVRAMVar("vpns%d_crt", unit));
-			fclose(fp);
 		}
 
 		snprintf(buffer, BUF_SIZE, "vpns%d_crl", unit);
 		if (!nvram_is_empty(buffer)) {
 			snprintf(buffer, BUF_SIZE, OVPN_DIR"/server%d/crl.pem", unit);
-			if (!(fp = fopen(buffer, "w"))) {
-				logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+			if (f_write_string(buffer, getNVRAMVar("vpns%d_crl", unit), FW_CREATE, 0600) < 0) {
+				logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 				stop_ovpn_server(unit);
 				return;
 			}
-			chmod(buffer, (S_IRUSR | S_IWUSR));
-			fprintf(fp, "%s", getNVRAMVar("vpns%d_crl", unit));
-			fclose(fp);
 		}
 
 		snprintf(buffer, BUF_SIZE, "vpns%d_dh", unit);
 		if (!nvram_is_empty(buffer)) {
 			snprintf(buffer, BUF_SIZE, OVPN_DIR"/server%d/dh.pem", unit);
-			if (!(fp = fopen(buffer, "w"))) {
-				logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+			if (f_write_string(buffer, getNVRAMVar("vpns%d_dh", unit), FW_CREATE, 0600) < 0) {
+				logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 				stop_ovpn_server(unit);
 				return;
 			}
-			chmod(buffer, (S_IRUSR | S_IWUSR));
-			fprintf(fp, "%s", getNVRAMVar("vpns%d_dh", unit));
-			fclose(fp);
 		}
 	}
 #endif
@@ -1186,14 +1214,11 @@ void start_ovpn_server(int unit)
 		snprintf(buffer, BUF_SIZE, "vpns%d_static", unit);
 		if (!nvram_is_empty(buffer)) {
 			snprintf(buffer, BUF_SIZE, OVPN_DIR"/server%d/static.key", unit);
-			if (!(fp = fopen(buffer, "w"))) {
-				logmsg(LOG_ERR, "failed to create %s: (%s)", buffer, strerror(errno));
+			if (f_write_string(buffer, getNVRAMVar("vpns%d_static", unit), FW_CREATE, 0600) < 0) {
+				logmsg(LOG_ERR, "failed to write %s: (%s)", buffer, strerror(errno));
 				stop_ovpn_server(unit);
 				return;
 			}
-			chmod(buffer, (S_IRUSR | S_IWUSR));
-			fprintf(fp, "%s", getNVRAMVar("vpns%d_static", unit));
-			fclose(fp);
 		}
 	}
 

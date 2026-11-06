@@ -1,5 +1,5 @@
 /*
- * bb_uuid.c
+ * wireguard.c
  *
  * Copyright (C) 2025 - 2026 FreshTomato
  * https://freshtomato.org/
@@ -26,9 +26,9 @@
  * BusyBox commit 3e8010196325 moved UUID DCE formatting from
  * util-linux/volume_id/util*.c to libbb/xfuncs_printf.c.
  *
- * libshared.so links selected volume_id objects directly, without linking
- * BusyBox libbb. Provide the tiny formatter here so the volume_id objects
- * can be linked into libshared.so.
+ * FreshTomato's libshared.so links selected volume_id objects directly,
+ * without linking BusyBox libbb. Provide the tiny formatter here so the
+ * volume_id objects can be linked into libshared.so.
  */
 
 #include <stdint.h>
@@ -38,7 +38,7 @@ void __attribute__((visibility("hidden")))
 format_uuid_DCE_37_chars(char *dst37, const uint8_t *buf)
 {
 	/* 37 = 16*2 hexdigits + 4 dashes + 1 NUL */
-	sprintf(dst37,
+	snprintf(dst37, 37,
 		"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
 		buf[0], buf[1], buf[2], buf[3],
 		buf[4], buf[5],

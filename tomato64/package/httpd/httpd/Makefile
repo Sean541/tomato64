@@ -22,12 +22,20 @@ ifeq ($(PLATFORM_HAS_FAN),y)
 ALL_CPPFLAGS += -DTOMATO64_HAS_FAN
 endif
 
+ifeq ($(PLATFORM_HAS_UBI_SYSUPGRADE),y)
+ALL_CPPFLAGS += -DTOMATO64_HAS_UBI_SYSUPGRADE
+endif
+
 ifeq ($(PLATFORM_MT6000),y)
 ALL_CPPFLAGS += -DTOMATO64_MT6000
 endif
 
 ifeq ($(PLATFORM_MT3600BE),y)
 ALL_CPPFLAGS += -DTOMATO64_MT3600BE
+endif
+
+ifeq ($(PLATFORM_BE12PRO),y)
+ALL_CPPFLAGS += -DTOMATO64_BE12PRO
 endif
 
 ifeq ($(PLATFORM_BE14000),y)
@@ -105,6 +113,13 @@ endif
 OBJS += usb.o
 OBJS += wwan.o
 #endif
+
+# Boards without a USB port build without TCONFIG_USB; drop the USB/WWAN
+# handlers there, as the gate above would (their tomato.c entries are
+# already TCONFIG_USB-only)
+ifneq ($(TCONFIG_USB),y)
+OBJS := $(filter-out usb.o wwan.o,$(OBJS))
+endif
 
 #ifeq ($(TCONFIG_NOCAT),y)
 OBJS += nocat.o

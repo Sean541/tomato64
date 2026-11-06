@@ -24,6 +24,10 @@ ifeq ($(PLATFORM_MT3600BE),y)
 ALL_CPPFLAGS += -DTOMATO64_MT3600BE
 endif
 
+ifeq ($(PLATFORM_BE12PRO),y)
+ALL_CPPFLAGS += -DTOMATO64_BE12PRO
+endif
+
 ifeq ($(PLATFORM_BE14000),y)
 ALL_CPPFLAGS += -DTOMATO64_BE14000
 endif
@@ -80,6 +84,10 @@ ifeq ($(PLATFORM_HAS_BRIDGER),y)
 ALL_CPPFLAGS += -DTOMATO64_HAS_BRIDGER
 endif
 
+ifeq ($(PLATFORM_HAS_UBI_SYSUPGRADE),y)
+ALL_CPPFLAGS += -DTOMATO64_HAS_UBI_SYSUPGRADE
+endif
+
 ALL_CFLAGS = -fPIC
 ALL_CFLAGS += $(CFLAGS)
 
@@ -92,7 +100,7 @@ ALL_CFLAGS += -DDEBUG_LOGMSG
 endif
 
 OBJS := rc.o init.o interface.o network.o wan.o services.o dhcp.o \
-	firewall.o ppp.o telssh.o listen.o redial.o \
+	firewall.o ppp.o telssh.o listen.o redial.o wanlink.o \
 	led.o qos.o forward.o misc.o restrict.o \
 	gpio.o sched.o bwlimit.o arpbind.o tomatoanon.o mwan.o pbr.o \
 	dnsmasq.o format.o nvme.o nvme_format.o nvme_partition.o
@@ -230,6 +238,7 @@ endif
 	@cd $(INSTALLDIR)/sbin && ln -sf rc reboot
 	@cd $(INSTALLDIR)/sbin && ln -sf rc halt
 	@cd $(INSTALLDIR)/sbin && ln -sf rc redial
+	@cd $(INSTALLDIR)/sbin && ln -sf rc wanlink
 
 	@cd $(INSTALLDIR)/sbin && ln -sf rc mwanroute
 

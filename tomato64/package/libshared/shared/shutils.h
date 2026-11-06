@@ -36,7 +36,7 @@
 extern int _eval(char *const argv[], const char *path, int timeout, pid_t *ppid);
 extern int eval_cmdline(const char *cmd, const char *path, int timeout, int *ppid);
 
-extern size_t safe_fread(const void *ptr, size_t size, size_t nmemb, FILE *stream);
+extern size_t safe_fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
 extern size_t safe_fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
 
 #if defined(TCONFIG_NGINX) || defined(TCONFIG_TOR)
@@ -106,6 +106,13 @@ static inline char *strlcat_r(const char *s1, const char *s2, char *buf, const s
 
 extern int get_ifname_unit(const char* ifname, int *unit, int *subunit);
 
+#if defined(TCONFIG_TINC) || defined(TCONFIG_FTP) || defined(TCONFIG_PPTPD) || defined(TCONFIG_SAMBASRV) || defined(TCONFIG_USB)
+ extern int str_isalnum_extra(const char *str, const char *extra, size_t minlen, size_t maxlen);
+#endif /* TCONFIG_TINC || TCONFIG_FTP || TCONFIG_PPTPD || TCONFIG_SAMBASRV || TCONFIG_USB */
+
+#if defined(TCONFIG_OPENVPN) || defined(TCONFIG_NOCAT)
+ extern int str_is_single_line(const char *str);
+#endif /* TCONFIG_OPENVPN || TCONFIG_NOCAT */
 extern char *find_in_list(const char *haystack, const char *needle);
 extern int remove_from_list(const char *name, char *list, int listsize);
 extern int add_to_list(const char *name, char *list, int listsize);
