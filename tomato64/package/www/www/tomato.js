@@ -2596,6 +2596,9 @@ function navi() {
 			['Overview',			'overview.asp'],
 			['Device List',			'devices.asp'],
 			['Web Usage',			'webmon.asp'],
+/* TOMATO64-BEGIN */
+			['Storage',			'storage.asp'],
+/* TOMATO64-END */
 			['Logs',			'log.asp'],
 		]],
 		['<span class="arrow">›</span> Bandwidth', 			'bwm', 0, [
@@ -2763,7 +2766,6 @@ function navi() {
 /* TOMATO64-FAN-BEGIN */
 			['Fans',			'fans.asp'],
 /* TOMATO64-FAN-END */
-			['Storage',			'storage.asp'],
 /* TOMATO64-END */
 /* TOMATO64-REMOVE-BEGIN */
 			['Buttons/LED',			'buttons.asp'],
