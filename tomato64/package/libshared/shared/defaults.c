@@ -1511,6 +1511,7 @@ struct nvram_tuple router_defaults[] = {
 	{ "http_id",			""				},
 	{ "web_mx",			"status,bwm"			},
 	{ "web_pb",			""				},
+	{ "restrict_wf",		"/tmp"				},
 
 /* admin-bwm */
 	{ "rstats_enable",		"1"				},

@@ -242,5 +242,8 @@ extern void asp_nvme_disks(int argc, char **argv);
 extern int nvme_mounts_valid(const char *data);
 extern void wo_nvmecommand(char *url);
 
+/* filexfer.c */
+extern void wi_filexfer(char *url, int len, char *boundary);
+extern void wo_filexfer(char *url);
 
 #endif

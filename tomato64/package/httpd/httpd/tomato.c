@@ -1296,6 +1296,7 @@ static const nvset_t nvset_list[] = {
 	{ "ttb_url",			V_LENGTH(0, 128)		},
 #endif
 	{ "web_mx",			V_LENGTH(0, 128)		},
+	{ "restrict_wf",		V_LENGTH(0, 512)		},
 	{ "http_wanport",		V_PORT				},
 	{ "telnetd_eas",		V_01				},
 	{ "telnetd_port",		V_PORT				},
@@ -2981,5 +2982,6 @@ const struct mime_handler mime_handlers[] = {
 	{ "uploadsplash.cgi",		NULL,					0,	wi_uploadsplash,	wo_uploadsplash,	1 },
 	{ "ext/uploadsplash.cgi",	NULL,					0,	wi_uploadsplash,	wo_uploadsplash,	1 },
 #endif
+	{ "filexfer.cgi",		NULL,					0,	wi_filexfer,		wo_filexfer,		1 },
 	{ NULL,				NULL,					0,	NULL,			NULL,			1 }
 };
