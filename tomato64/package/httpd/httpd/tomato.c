@@ -16,6 +16,9 @@
 #ifdef TOMATO64_BE14000
 #include "panel.h"
 #endif /* TOMATO64_BE14000 */
+#ifdef TOMATO64_HAS_MT7996APP
+#include "mt7996app.h"
+#endif /* TOMATO64_HAS_MT7996APP */
 #endif /* TOMATO64 */
 
 #include <sys/sysinfo.h>
@@ -1990,6 +1993,7 @@ static const nvset_t nvset_list[] = {
 	{"wifi_sta_list",		V_NONE				},	/* Wireless Station Mode */
 	{"wifi_phy_count",		V_RANGE(0, 10)			},	/* Number of WiFi PHYs detected (set by wlconfig) */
 	{"wifi_phy_count_expected",	V_RANGE(0, 10)			},	/* Expected WiFi PHYs for this device (constant) */
+	{"wifi_vht_2g",			V_01				},	/* mt76: VHT (256-QAM) rates on 2.4 GHz, needs reboot */
 #ifdef TOMATO64_BE14000
 	{"panel_pages",			V_LENGTH(0, 256)		},	/* Front panel: page names, in swipe order */
 	{"panel_auto_lock",		V_RANGE(0, 30)			},	/* minutes; 0 never goes idle */
@@ -2019,6 +2023,10 @@ static const nvset_t nvset_list[] = {
 	{"flow_offloading",		V_RANGE(0, 2)			},
 	{"wed_offloading",		V_RANGE(0, 1)			},
 	{"bridger_enable",		V_01				},
+#ifdef TOMATO64_HAS_MT7996APP
+	{"mt7996app_enable",		V_01				},
+	{"mt7996app_history",		V_LENGTH(0, 128)		},
+#endif /* TOMATO64_HAS_MT7996APP */
 	{"packet_steering",		V_RANGE(0, 2)			},
 	{"steering_flows",		V_NONE				},
 	{"steering_flows_custom",	V_RANGE(0, 99999)		},
@@ -2894,6 +2902,9 @@ const struct mime_handler mime_handlers[] = {
 	{ "panel/screen.png",		NULL,					0,	wi_generic_noid,	wo_panel_screen,	1 },
 	{ "panel/input.cgi",		NULL,					0,	wi_generic,		wo_panel_input,		1 },
 #endif /* TOMATO64_BE14000 */
+#ifdef TOMATO64_HAS_MT7996APP
+	{ "mt7996app/**",		NULL,					0,	wi_generic_noid,	wo_mt7996app,		1 },
+#endif /* TOMATO64_HAS_MT7996APP */
 #endif /* TOMATO64 */
 	{ "update.cgi",			mime_javascript,			0,	wi_generic,		wo_update,		1 },
 	{ "tomato.cgi",			NULL,					0,	wi_generic,		wo_tomato,		1 },

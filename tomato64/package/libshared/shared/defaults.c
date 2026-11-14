@@ -2376,12 +2376,17 @@ struct nvram_tuple router_defaults[] = {
 #endif /* TOMATO64_BE14000 */
 	WIFI_DEF_PHY_IFACES(2)
 #endif
+	{"wifi_vht_2g",			"0"			},	/* mt76: non-standard VHT (256-QAM) rates on 2.4 GHz; module param, needs reboot */
 #endif /* TOMATO64_WIFI */
 
 	{ "ctf_disable",		"1"				},
 	{ "flow_offloading",		"0"				},
 	{ "wed_offloading",		"0"				},
 	{ "bridger_enable",		"0"				},	/* bridge forwarding accelerator (bridger): 0 = off, 1 = on */
+#ifdef TOMATO64_HAS_MT7996APP
+	{ "mt7996app_enable",		"0"				},	/* Tools > Wireless Monitor: run the mt7996app dashboard daemon */
+	{ "mt7996app_history",		""				},	/* file to keep its traffic history in across restarts; empty = RAM only */
+#endif /* TOMATO64_HAS_MT7996APP */
 	{ "packet_steering",		"1"				},	/* enabled, same as OpenWrt's default */
 	{ "steering_flows",		"0"				},
 	{ "steering_flows_custom",	"0"				},

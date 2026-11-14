@@ -2553,6 +2553,9 @@ void start_services(void)
 #ifdef TOMATO64_HAS_BRIDGER
 	start_bridger();
 #endif /* TOMATO64_HAS_BRIDGER */
+#ifdef TOMATO64_HAS_MT7996APP
+	start_mt7996app();
+#endif /* TOMATO64_HAS_MT7996APP */
 #endif
 	if (once) {
 		once = 0;
@@ -2734,6 +2737,9 @@ void stop_services(void)
 #ifdef TOMATO64_HAS_BRIDGER
 	stop_bridger();
 #endif /* TOMATO64_HAS_BRIDGER */
+#ifdef TOMATO64_HAS_MT7996APP
+	stop_mt7996app();
+#endif /* TOMATO64_HAS_MT7996APP */
 #endif
 	if ((check_action() != ACT_REBOOT) && !nvram_get_int("g_reboot") && !nvram_get_int("g_upgrade"))
 		stop_nvme();
@@ -3046,6 +3052,10 @@ static int svc_exec_simple(const struct svc_entry *svc, const char *service, int
 
 				if (nvram_get_int("webmon_bkp"))
 					xstart("/usr/sbin/webmon_bkp", "hourly"); /* make a copy before upgrade */
+
+#ifdef TOMATO64
+				run_nvscript("script_shut", "upgrade", 10);
+#endif /* TOMATO64 */
 
 				stop_sched();
 				stop_cron();

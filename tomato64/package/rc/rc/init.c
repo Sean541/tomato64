@@ -10743,6 +10743,8 @@ static void sysinit(void)
 	mknod("/dev/pts/1", S_IRWXU|S_IFCHR, makedev(136, 1));
 	mount("devpts", "/dev/pts", "devpts", MS_MGC_VAL, NULL);
 #ifdef TOMATO64
+	/* mac80211/mt76 counters for mt7996app; fails harmlessly without CONFIG_DEBUG_FS */
+	mount("debugfs", "/sys/kernel/debug", "debugfs", 0, NULL);
 	symlink("/proc/self/fd", "/dev/fd");
 	symlink("/proc/self/fd/0", "/dev/stdin");
 	symlink("/proc/self/fd/1", "/dev/stdout");
@@ -10918,6 +10920,15 @@ static void sysinit(void)
 	}
 	eval("mount", "-a");
 #endif /* TOMATO64_X86_64 */
+
+#ifdef TOMATO64_WIFI
+	/* mt76 reads vendor_vht_2g once, when the radios register, so load the
+	 * core module with it before set_devs_* modprobes any mt76 driver.
+	 * Fails silently on targets without mt76.
+	 */
+	if (nvram_get_int("wifi_vht_2g"))
+		eval("modprobe", "-q", "mt76", "vendor_vht_2g=1");
+#endif /* TOMATO64_WIFI */
 
 #ifdef TOMATO64_MT6000
 	eval("set_devs_mt6000");
@@ -11228,7 +11239,14 @@ int init_main(int argc, char *argv[])
 			if (nvram_get_int("webmon_bkp"))
 				xstart("/usr/sbin/webmon_bkp", "hourly"); /* make a copy before halt/reboot router */
 
+#ifndef TOMATO64
 			run_nvscript("script_shut", NULL, 10);
+#else
+			/* pass the reason as $1; "upgrade" is passed from upgrade-start */
+			run_nvscript("script_shut", (state == SIGTERM) ? "reboot" :
+			                            (state == SIGQUIT) ? "halt" :
+			                            (state == SIGINT) ? "stop" : "restart", 10);
+#endif /* TOMATO64 */
 
 			stop_services();
 			stop_wan();
