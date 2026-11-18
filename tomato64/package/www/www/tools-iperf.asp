@@ -179,8 +179,8 @@ function execute() {
 			}
 		}
 		E('test_status').textContent = statusText;
-		E('test_time').textContent = timeText;
-		E('test_xfered').textContent = xferedText;
+		E('test_time').innerHTML = timeText;
+		E('test_xfered').innerHTML = xferedText;
 		E('test_speed').textContent = speedText;
 		changeTestButtonText();
 		toggleAllFields(!iperf_up);
