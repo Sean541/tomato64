@@ -1,0 +1,128 @@
+/* ==========================================================================
+ *  Global Header Alert Badge & Theme-Adaptive Modal Styles
+ *  ========================================================================== */
+
+/* --- Universal Dual-Strobe Animation (Visible on Red, White & Dark headers) --- */
+@keyframes universalAlertStrobe {
+    0%, 100% {
+        background-color: #d60000;
+        border-color: #ffffff;
+        color: #ffffff;
+        transform: scale(1);
+        box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+    }
+    40% {
+        background-color: #ff003b;
+        border-color: #fffb00;
+        color: #ffffff;
+        transform: scale(1.08);
+        box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.6), 0 0 20px 6px rgba(255, 0, 59, 0.9);
+    }
+    55% {
+        /* Electric Amber Flare - Pops against red, dark, and white headers alike */
+        background-color: #ffeb3b;
+        border-color: #d60000;
+        color: #000000;
+        transform: scale(1.14);
+        box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.7), 0 0 28px 10px rgba(255, 235, 59, 1);
+    }
+    70% {
+        background-color: #ff003b;
+        border-color: #ffffff;
+        color: #ffffff;
+        transform: scale(1.06);
+        box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.6), 0 0 16px 5px rgba(255, 0, 59, 0.8);
+    }
+}
+
+#header-alert-box {
+position: absolute;
+font-weight: 900;
+font-size: 13px;
+letter-spacing: 2px;
+padding: 6px 18px;
+border-radius: 5px;
+border: 2.5px solid #ffffff;
+cursor: pointer;
+z-index: 100;
+text-align: center;
+user-select: none;
+transform-origin: center center;
+animation: universalAlertStrobe 0.85s infinite ease-in-out;
+}
+
+@media only screen and (max-width: 750px) {
+    #header-alert-box {
+    left: auto !important;
+    right: 15px !important;
+    top: 10px !important;
+    }
+}
+
+/* --- Theme-Adaptive Modal Styles --- */
+#global-alert-modal {
+position: fixed;
+top: 0;
+left: 0;
+width: 100%;
+height: 100%;
+background: rgba(0, 0, 0, 0.72);
+backdrop-filter: blur(2px);
+z-index: 999999;
+display: none;
+align-items: center;
+justify-content: center;
+}
+
+#global-alert-modal .modal-card {
+background: var(--tomato-panel-background, #ffffff);
+color: var(--tomato-color, #333333);
+min-width: 340px;
+max-width: 580px;
+border-radius: var(--tomato-controls-border-radius, 6px);
+box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+overflow: hidden;
+border: 1px solid var(--tomato-controls-border, rgba(255, 255, 255, 0.15));
+border-top: 6px solid var(--tomato-accent-color, #d9534f);
+}
+
+#global-alert-modal .modal-header {
+padding: 16px 20px 8px;
+font-size: 18px;
+font-weight: bold;
+color: var(--tomato-accent-color, #c0392b);
+}
+
+#global-alert-modal .modal-body {
+padding: 12px 20px 20px;
+font-size: 14px;
+line-height: 1.5;
+color: var(--tomato-color, #333333);
+white-space: pre-wrap;
+word-break: break-word;
+max-height: 400px;
+overflow-y: auto;
+}
+
+#global-alert-modal .modal-footer {
+background: var(--tomato-container-background, #f7f7f7);
+padding: 12px 20px;
+text-align: right;
+border-top: 1px solid var(--tomato-controls-border, rgba(0, 0, 0, 0.08));
+}
+
+#global-alert-modal .modal-btn {
+background: var(--tomato-accent-color, #d9534f);
+color: #ffffff;
+border: none;
+padding: 8px 24px;
+border-radius: var(--tomato-controls-border-radius, 4px);
+font-weight: bold;
+font-size: 13px;
+cursor: pointer;
+transition: opacity 0.15s ease-in-out;
+}
+
+#global-alert-modal .modal-btn:hover {
+opacity: 0.88;
+}

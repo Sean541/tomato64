@@ -3717,3 +3717,124 @@ var PortNames = {
 	}
 };
 /* TOMATO64-END */
+
+// ============================================================================
+// Global Header Alert Badge & Modal Poller
+// ============================================================================
+var lastDismissedAlert = '';
+
+// Load alert.css dynamically
+(function() {
+	var link = document.createElement('link');
+	link.rel = 'stylesheet';
+	link.type = 'text/css';
+	link.href = 'alert.css';
+	document.head.appendChild(link);
+})();
+
+// Function to display the alert modal popup
+function showGlobalAlertModal(msg) {
+	var modal = E('global-alert-modal');
+	if (!modal) {
+		modal = document.createElement('div');
+		modal.id = 'global-alert-modal';
+
+		modal.innerHTML =
+		'<div class="modal-card">' +
+		'<div class="modal-header">⚠️ System Alert</div>' +
+		'<div id="global-alert-text" class="modal-body"></div>' +
+		'<div class="modal-footer">' +
+		'<button type="button" id="global-alert-close-btn" class="modal-btn">OK</button>' +
+		'</div>' +
+		'</div>';
+
+				document.body.appendChild(modal);
+
+				E('global-alert-close-btn').onclick = function() {
+					modal.style.display = 'none';
+				};
+	}
+
+	E('global-alert-text').textContent = msg;
+	modal.style.display = 'flex';
+}
+
+// Function to position the badge dynamically next to whatever model text exists
+function updateAlertBadgePosition(alertBox, header) {
+	header.style.position = 'relative';
+
+	var isAtTheme = !nvram.web_css || nvram.web_css.indexOf('at') === 0 ||
+	(E('guicss') && E('guicss').href.indexOf('/at') !== -1);
+
+	if (isAtTheme) {
+		var versionElem = header.querySelector('.version');
+		var leftOffset = 260;
+
+		if (versionElem) {
+			var hRect = header.getBoundingClientRect();
+			var vRect = versionElem.getBoundingClientRect();
+			leftOffset = Math.max(240, Math.round(vRect.right - hRect.left + 22));
+		}
+
+		alertBox.style.left = leftOffset + 'px';
+		alertBox.style.top = '13px';
+	} else {
+		var titleElem = header.querySelector('.title a') || header.querySelector('.title');
+		var leftOffset = 200;
+		if (titleElem) {
+			var hRect = header.getBoundingClientRect();
+			var tRect = titleElem.getBoundingClientRect();
+			leftOffset = Math.round(tRect.right - hRect.left + 22);
+		}
+		alertBox.style.left = leftOffset + 'px';
+		alertBox.style.top = '12px';
+	}
+}
+
+// Global Poller
+var globalAlertPoller = new TomatoRefresh('isup.jsx', '', 5);
+
+globalAlertPoller.refresh = function(text) {
+	try {
+		eval(text);
+		var msg = (typeof isup !== 'undefined' && isup.notice_alert) ? isup.notice_alert.trim() : '';
+		var header = E('header');
+		if (!header) return;
+
+		var alertBox = E('header-alert-box');
+		if (!alertBox) {
+			alertBox = document.createElement('div');
+			alertBox.id = 'header-alert-box';
+			alertBox.textContent = 'ALERT';
+			alertBox.style.display = 'none';
+			header.appendChild(alertBox);
+		}
+
+		if (msg.length === 0) {
+			lastDismissedAlert = '';
+			alertBox.style.display = 'none';
+			return;
+		}
+
+		if (msg !== lastDismissedAlert) {
+			updateAlertBadgePosition(alertBox, header);
+			alertBox.style.display = 'block';
+
+			alertBox.onclick = function() {
+				alertBox.style.display = 'none';
+				lastDismissedAlert = msg;
+
+				showGlobalAlertModal(msg);
+
+				// Clear router notice file
+				var x = new XmlHttp();
+				x.post('shell.cgi', 'action=execute&command=' + escapeCGI('rm -f /var/notice/alert') + '&_http_id=' + (nvram.http_id || ''));
+			};
+		}
+	} catch (e) { }
+};
+
+// Start poller on window load
+addEvent(window, 'load', function() {
+	globalAlertPoller.initPage(1000, 5);
+});

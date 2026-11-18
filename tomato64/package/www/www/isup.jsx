@@ -13,6 +13,7 @@ isup.notice_iptables = '<% notice("iptables"); %>';
 isup.notice_ip6tables = '<% notice("ip6tables"); %>';
 isup.notice_cifs = '<% notice("cifs"); %>';
 isup.notice_jffs = '<% notice("jffs"); %>';
+isup.notice_alert = '<% notice("alert"); %>';
 /* JFFS2-BEGIN */
 //	<% statfs("/jffs", "jffs2"); %>
 /* JFFS2-END */
